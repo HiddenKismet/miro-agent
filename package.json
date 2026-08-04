@@ -1,6 +1,6 @@
 {
   "name": "miro-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Miro Personal Agent — a personal agent built on the Pi Agent core, with Miro Web, subagents, tasks, and goals as native features.",
   "private": true,
   "license": "MIT"

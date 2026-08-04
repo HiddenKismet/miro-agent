@@ -1,6 +1,6 @@
 {
   "name": "miro-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Miro Web — built-in browser UI for Miro Personal Agent (spawns pi --mode rpc and bridges it to the browser).",
   "type": "module",
