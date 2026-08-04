@@ -1,0 +1,7 @@
+{
+  "packages": [
+    "npm:pi-subagents",
+    "npm:@mjasnikovs/pi-task",
+    "npm:pi-goal-list-loop-audit"
+  ]
+}

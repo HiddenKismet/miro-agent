@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Miro Personal Agent — Let Miro sort your mind. Built on Pi Agent core." />
+  <title>Miro</title>
+  <link rel="stylesheet" href="/vendor/hljs-theme.css" id="hljs-theme" />
+  <link rel="stylesheet" href="/style.css?v=3" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E" />
+  <script>
+    // Theme: light / dark / system — mirrors pi.dev's data-theme approach
+    (() => {
+      const root = document.documentElement;
+      const stored = localStorage.getItem("pi-web-theme");
+      const mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+      const apply = () => {
+        const theme = mode === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : mode;
+        root.dataset.theme = theme;
+        root.dataset.themeMode = mode;
+        root.style.colorScheme = theme;
+      };
+      apply();
+      matchMedia("(prefers-color-scheme: dark)").addEventListener("change", apply);
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#messages" data-i18n="skipToContent">跳到内容</a>
+  <div id="app">
+    <!-- ===================== Sidebar ===================== -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <span class="brand-mark">✦</span>
+          <span class="brand-name">PI&nbsp;Web</span>
+        </div>
+        <button id="btn-new-session" class="btn btn-primary btn-block" data-i18n="newChat">＋ 新对话</button>
+      </div>
+      <button id="session-list-toggle" class="sidebar-section-title sidebar-section-toggle" aria-expanded="true" aria-controls="session-list">
+        <span class="section-chevron">▾</span><span data-i18n="sessions">会话</span>
+      </button>
+      <div id="session-list" class="session-list">
+        <div class="list-empty" id="session-list-empty" data-i18n="noSessions">暂无会话</div>
+      </div>
+      <div class="sidebar-footer">
+        <div class="status-card">
+          <span id="conn-status" class="conn-dot conn-off" title="disconnected"></span>
+          <span id="conn-text" data-i18n="connecting">连接中…</span>
+          <span class="footer-ver">pi-web</span>
+        </div>
+        <button id="btn-lang" class="linklike" title="切换语言 / Language">中 / EN</button>
+      </div>
+    </aside>
+
+    <!-- ===================== Main ===================== -->
+    <main id="main">
+      <header id="topbar">
+        <button id="btn-sidebar-toggle" class="icon-btn" title="Sidebar" aria-label="Toggle sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        </button>
+        <div class="topbar-session">
+          <span id="session-name" class="session-name" title="点击重命名 / Click to rename" data-i18n-title="renameSession">—</span>
+        </div>
+        <div class="topbar-right">
+          <span id="queued-badge" class="badge" hidden></span>
+          <span id="ctx-usage" class="ctx-usage" title="context usage"></span>
+          <span id="streaming-indicator" class="streaming-indicator" hidden>
+            <span class="spinner"></span><span data-i18n="working">工作中…</span>
+          </span>
+          <button id="btn-commands" class="icon-btn cmd-btn" title="Commands (Ctrl+K)" aria-label="Commands">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>
+          </button>
+          <button id="btn-settings" class="icon-btn" title="settings" data-i18n-title="settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1.5 14h5M9.5 8h5M17.5 16h5"/></svg>
+          </button>
+          <button id="btn-theme" class="icon-btn" title="theme" data-i18n-title="theme" aria-label="Theme">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9c0-1.5-.4-2.9-1-4a6 6 0 0 1-8-8 9 9 0 0 0 0 3Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="messages" class="messages" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <div class="welcome-mark">✦</div>
+          <h1 data-i18n="welcomeTitle">Miro Web</h1>
+          <p data-i18n="welcomeSub">Let Miro sort your mind.</p>
+          <div class="welcome-hints">
+            <code>/login</code> <code>/model</code> <code>/compact</code> <code>/settings</code> <code>/tree</code>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== Composer ===================== -->
+      <div id="composer-wrap">
+        <div id="cmd-menu" class="cmd-menu" hidden></div>
+        <div id="composer">
+          <div id="composer-toolbar">
+            <div class="toolbar-left">
+              <select id="model-select" title="model"></select>
+              <select id="thinking-select" title="thinking level"></select>
+            </div>
+            <div class="toolbar-right">
+              <button id="btn-attach" class="icon-btn" title="attach image" data-i18n-title="attach" aria-label="Attach image">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <button id="btn-abort" class="btn btn-danger btn-pill" hidden data-i18n="stop">■ 停止</button>
+              <button id="btn-send" class="btn-send" title="send" data-i18n-title="send" aria-label="Send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+              </button>
+            </div>
+          </div>
+          <div id="attachments" class="attachments" hidden></div>
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="给 PI 发送消息…  输入 / 打开命令面板"
+            data-i18n-placeholder="inputPlaceholder"
+          ></textarea>
+        </div>
+        <div class="composer-hint" data-i18n="hint">Enter 发送 · Shift+Enter 换行 · Esc 停止 · Ctrl+K 命令面板</div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================== Settings drawer ===================== -->
+  <div id="settings-panel" class="drawer-overlay" hidden>
+    <div class="drawer">
+      <div class="drawer-header">
+        <h2 data-i18n="settings">设置</h2>
+        <button id="btn-settings-close" class="icon-btn" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="drawer-body">
+        <section class="settings-section">
+          <h3 data-i18n="appearance">外观</h3>
+          <div class="settings-row">
+            <label data-i18n="theme">主题</label>
+            <div class="seg" id="theme-seg">
+              <button data-theme-mode="light" data-i18n="themeLight">浅色</button>
+              <button data-theme-mode="dark" data-i18n="themeDark">深色</button>
+              <button data-theme-mode="system" data-i18n="themeSystem">跟随系统</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <label data-i18n="language">语言</label>
+            <div class="seg" id="lang-seg">
+              <button data-lang="zh">中文</button>
+              <button data-lang="en">English</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3 data-i18n="credentials">凭据</h3>
+          <p class="settings-note" data-i18n="credentialsNote">等价于 pi 的 /login —— API key 保存到 ~/.pi/agent/auth.json。OAuth 登录请使用终端里的 /login。</p>
+          <div class="cred-add">
+            <input id="cred-provider" list="known-providers" placeholder="provider" autocomplete="off" />
+            <datalist id="known-providers"></datalist>
+            <input id="cred-key" type="password" placeholder="API key (sk-…)" autocomplete="off" />
+            <button id="btn-cred-save" class="btn btn-primary" data-i18n="save">保存</button>
+          </div>
+          <div id="cred-list" class="cred-list"></div>
+        </section>
+
+        <section class="settings-section">
+          <h3 data-i18n="agent">代理</h3>
+          <div class="settings-row">
+            <label data-i18n="autoCompaction">自动压缩</label>
+            <label class="switch"><input type="checkbox" id="auto-compaction" /><span class="slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <label data-i18n="autoRetry">自动重试</label>
+            <label class="switch"><input type="checkbox" id="auto-retry" /><span class="slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <label data-i18n="restartAgent">重启 agent 进程</label>
+            <button id="btn-restart" class="btn btn-sm" data-i18n="restart">重启</button>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3 data-i18n="sessionInfo">会话信息</h3>
+          <div id="session-stats" class="session-stats"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <input type="file" id="file-input" accept="image/*" multiple hidden />
+
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/app.js?v=3"></script>
+</body>
+</html>
