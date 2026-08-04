@@ -88,6 +88,38 @@ const I18N = {
     skipToContent: "跳到内容",
     copyCode: "复制",
     copied: "已复制",
+    git: "Git",
+    gitClean: "干净",
+    gitChanges: "改动",
+    gitCommits: "最近提交",
+    gitDiff: "Diff",
+    gitNoRepo: "当前目录不是 git 仓库",
+    gitCommit: "提交",
+    gitPush: "推送",
+    gitRelease: "发布",
+    gitLoading: "加载中…",
+    kanban: "看板",
+    kanbanTitle: "创作看板",
+    stageProposed: "提出",
+    stageInProgress: "进行中",
+    stagePendingReview: "待审核",
+    stageDone: "已完成",
+    taskNew: "＋ 新任务",
+    refresh: "刷新",
+    backToChat: "回到对话",
+    taskStart: "开始",
+    taskCommit: "提交",
+    taskRequestReview: "请求审核",
+    taskApprove: "确认完成",
+    taskResume: "继续修改",
+    taskDetail: "详情",
+    taskEmpty: "暂无任务",
+    taskNewTitle: "新任务",
+    taskNewPlaceholder: "任务标题…",
+    taskUncommitted: "未提交",
+    taskAhead: "领先",
+    taskNoRepo: "当前目录不是 git 仓库，任务看板不可用",
+    reviewHint: "待你审核",
   },
   en: {
     newChat: "＋ New Chat",
@@ -164,6 +196,38 @@ const I18N = {
     skipToContent: "Skip to content",
     copyCode: "Copy",
     copied: "Copied",
+    git: "Git",
+    gitClean: "Clean",
+    gitChanges: "Changes",
+    gitCommits: "Recent commits",
+    gitDiff: "Diff",
+    gitNoRepo: "Not a git repository",
+    gitCommit: "Commit",
+    gitPush: "Push",
+    gitRelease: "Release",
+    gitLoading: "Loading…",
+    kanban: "Board",
+    kanbanTitle: "Task board",
+    stageProposed: "Proposed",
+    stageInProgress: "In progress",
+    stagePendingReview: "Review",
+    stageDone: "Done",
+    taskNew: "＋ New task",
+    refresh: "Refresh",
+    backToChat: "Back to chat",
+    taskStart: "Start",
+    taskCommit: "Commit",
+    taskRequestReview: "Request review",
+    taskApprove: "Approve",
+    taskResume: "Keep editing",
+    taskDetail: "Detail",
+    taskEmpty: "No tasks",
+    taskNewTitle: "New task",
+    taskNewPlaceholder: "Task title…",
+    taskUncommitted: "uncommitted",
+    taskAhead: "ahead",
+    taskNoRepo: "Not a git repository — task board unavailable",
+    reviewHint: "awaiting review",
   },
 };
 
@@ -216,6 +280,11 @@ const sessionListEl = $("session-list");
 const sessionListEmpty = $("session-list-empty");
 const cmdMenu = $("cmd-menu");
 const settingsPanel = $("settings-panel");
+const gitPanel = $("git-panel");
+const gitChipText = $("git-chip-text");
+const kanbanEl = $("kanban");
+const kanbanReviewBadge = $("kanban-review-badge");
+const kanbanRepoEl = $("kanban-repo");
 
 /* ==========================================================================
    State
@@ -242,6 +311,7 @@ const state = {
   sessions: [], // sidebar session list
   cmdMenu: null, // { mode: "commands" | "sessions", items, index }
   activeGroup: null, // turn-content element of the current non-user turn group
+  gitCwd: "",
 };
 
 /* ==========================================================================
@@ -351,6 +421,8 @@ async function reloadAll() {
     loadModels();
     loadThinkingLevels();
     loadCommands();
+    refreshGit();
+    refreshTasks();
   } finally {
     bootstrapping = false;
   }
@@ -938,6 +1010,7 @@ function handleEvent(evt) {
     case "agent_settled":
       state.streaming = false;
       updateStreamingIndicator();
+      refreshRepoThrottled();
       break;
     case "message_start":
       onMessageStart(evt.message);
@@ -1385,6 +1458,15 @@ function nearBottom() {
   return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 140;
 }
 
+let lastRepoRefresh = 0;
+function refreshRepoThrottled() {
+  const now = Date.now();
+  if (now - lastRepoRefresh < 2500) return;
+  lastRepoRefresh = now;
+  refreshGit();
+  refreshTasks();
+}
+
 function scrollBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -1508,6 +1590,11 @@ const LOCAL_COMMANDS = [
   { name: "/tree", desc: "查看会话树并分支", run: showTree },
   { name: "/export", desc: "导出会话为 HTML", run: exportSession },
   { name: "/copy", desc: "复制最后一条助手消息", run: copyLastAssistant },
+  { name: "/git", desc: "打开 Git 面板", run: openGitPanel },
+  { name: "/commit", desc: "提交当前改动", run: () => gitPrompt(GIT_PROMPTS.commit) },
+  { name: "/kanban", desc: "打开创作看板", run: () => {
+    if (!kanbanView) toggleKanban();
+  } },
 ];
 
 function handleLocalCommand(text) {
@@ -1915,6 +2002,321 @@ async function loadSessionStatsSection() {
 }
 
 /* ==========================================================================
+   Git panel (live read-only data via /api/git, writes go through the agent)
+   ========================================================================== */
+
+let gitPanelOpen = false;
+
+function gitUrl(op, params = {}) {
+  const q = new URLSearchParams({ op, ...params });
+  const base = `/api/git?${q.toString()}`;
+  return WEB_TOKEN ? `${base}&token=${encodeURIComponent(WEB_TOKEN)}` : base;
+}
+
+async function fetchGit(op, params = {}) {
+  try {
+    const r = await fetch(gitUrl(op, params), { headers: apiHeaders() });
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+async function refreshGit() {
+  const cwd = activeCwd();
+  state.gitCwd = cwd;
+  const params = cwd ? { cwd } : {};
+  const st = await fetchGit("status", params);
+  if (st && st.ok && st.data) {
+    const d = st.data;
+    const total = d.staged.length + d.unstaged.length + d.untracked.length;
+    gitChipText.textContent = total ? `${d.branch || "git"} ●` : d.branch || "git";
+    if (gitPanelOpen) await renderGitPanel(d);
+  } else if (st && st.ok === false && /not a git repository/i.test(st.error || "")) {
+    gitChipText.textContent = "git";
+    if (gitPanelOpen) renderGitNoRepo();
+  } else {
+    gitChipText.textContent = "git";
+  }
+}
+
+function renderGitNoRepo() {
+  $("git-no-repo").hidden = false;
+  $("git-clean").hidden = true;
+  $("git-branch").textContent = "-";
+  $("git-ahead-behind").textContent = "";
+  $("git-changes").innerHTML = "";
+  $("git-commits").innerHTML = "";
+  $("git-diff").hidden = true;
+  $("git-diff").textContent = "";
+}
+
+async function renderGitPanel(st) {
+  $("git-no-repo").hidden = true;
+  $("git-branch").textContent = st.branch || "-";
+  $("git-ahead-behind").textContent = `${st.ahead ? `↑${st.ahead} ` : ""}${st.behind ? `↓${st.behind}` : ""}`.trim();
+
+  const changesEl = $("git-changes");
+  changesEl.innerHTML = "";
+  const groups = [
+    ["staged", st.staged, "git-staged"],
+    ["unstaged", st.unstaged, "git-unstaged"],
+    ["untracked", st.untracked, "git-untracked"],
+  ];
+  let n = 0;
+  for (const [, items, cls] of groups) n += items.length;
+  $("git-clean").hidden = n > 0;
+  for (const [, items, cls] of groups) {
+    for (const it of items) {
+      const row = el("button", `git-change ${cls}`);
+      const s = el("span", "git-status");
+      s.textContent = it.status;
+      const name = el("span", "git-path");
+      name.textContent = it.path;
+      name.title = it.path;
+      row.append(s, name);
+      row.addEventListener("click", () => loadDiff(it.path));
+      changesEl.appendChild(row);
+    }
+  }
+
+  const commitsEl = $("git-commits");
+  commitsEl.innerHTML = "";
+  const log = await fetchGit("log", { n: 12 });
+  if (log && log.ok) {
+    for (const c of log.data) {
+      const row = el("div", "git-commit");
+      const meta = el("span", "git-commit-meta");
+      meta.textContent = `${c.hash} ${c.date} · ${c.author}`;
+      const sub = el("span", "git-commit-subject");
+      sub.textContent = c.subject;
+      row.append(meta, sub);
+      commitsEl.appendChild(row);
+    }
+  }
+}
+
+async function loadDiff(path) {
+  const diffEl = $("git-diff");
+  diffEl.hidden = false;
+  diffEl.textContent = t("gitLoading");
+  const r = await fetchGit("diff", { path, ...(state.gitCwd ? { cwd: state.gitCwd } : {}) });
+  const text = r && r.ok ? r.data.text || "(empty diff)" : r?.error || "diff failed";
+  diffEl.innerHTML = "";
+  for (const line of text.split("\n")) {
+    const row = el("span", "git-diff-line");
+    if (line.startsWith("+") && !line.startsWith("+++")) row.classList.add("ad");
+    else if (line.startsWith("-") && !line.startsWith("---")) row.classList.add("dl");
+    else if (line.startsWith("@@")) row.classList.add("hunk");
+    else if (line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("+++") || line.startsWith("---")) row.classList.add("hd");
+    row.textContent = line || " ";
+    diffEl.appendChild(row);
+  }
+}
+
+function openGitPanel() {
+  gitPanelOpen = true;
+  gitPanel.hidden = false;
+  refreshGit();
+}
+
+function closeGitPanel() {
+  gitPanelOpen = false;
+  gitPanel.hidden = true;
+}
+
+function gitPrompt(text) {
+  addUserMessage(text, []);
+  send({ type: "prompt", message: text, ...(state.streaming ? { streamingBehavior: "steer" } : {}) })
+    .then((resp) => {
+      if (!resp.success) showToast(resp.error || t("commandFailed"), "error");
+    })
+    .catch((err) => showToast(err.message, "error"));
+}
+
+const GIT_PROMPTS = {
+  commit: "请提交当前工作区的改动（用 git_commit 工具）",
+  push: "请推送当前分支（用 git_push 工具）",
+  release: "请发布一个新版本（用 git_release 工具）",
+};
+
+/* ==========================================================================
+   Task board (kanban) — read-only view; all actions go through conversation
+   ========================================================================== */
+
+let kanbanView = false;
+
+// cwd of the active session (from the sidebar session list), so the board
+// follows the repo the user is actually talking to.
+function activeCwd() {
+  if (state.sessionFile) {
+    const s = state.sessions.find((x) => x.file === state.sessionFile);
+    if (s && s.cwd) return s.cwd;
+  }
+  return "";
+}
+
+function taskPrompt(text) {
+  addUserMessage(text, []);
+  send({ type: "prompt", message: text, ...(state.streaming ? { streamingBehavior: "steer" } : {}) })
+    .then((resp) => {
+      if (!resp.success) showToast(resp.error || t("commandFailed"), "error");
+    })
+    .catch((err) => showToast(err.message, "error"));
+}
+
+async function fetchTasks() {
+  const cwd = activeCwd();
+  const q = new URLSearchParams();
+  if (cwd) q.set("cwd", cwd);
+  const base = `/api/tasks?${q.toString()}`;
+  const url = WEB_TOKEN ? `${base}&token=${encodeURIComponent(WEB_TOKEN)}` : base;
+  try {
+    const r = await fetch(url, { headers: apiHeaders() });
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+function toggleKanban() {
+  kanbanView = !kanbanView;
+  kanbanEl.hidden = !kanbanView;
+  messagesEl.hidden = kanbanView;
+  $("btn-kanban").classList.toggle("active", kanbanView);
+  if (kanbanView) refreshTasks();
+  else scrollBottom();
+}
+
+async function refreshTasks() {
+  const data = await fetchTasks();
+  if (!data || !data.ok) return;
+  const tasks = data.tasks ?? [];
+  kanbanRepoEl.textContent = data.cwd || "";
+  renderKanban(tasks);
+  const review = tasks.filter((t) => t.stage === "pending_review").length;
+  kanbanReviewBadge.hidden = review === 0;
+  kanbanReviewBadge.textContent = review ? `${review} ${t("reviewHint")}` : "";
+}
+
+function renderKanban(tasks) {
+  const byStage = { proposed: [], in_progress: [], pending_review: [], done: [] };
+  for (const t of tasks) {
+    if (byStage[t.stage]) byStage[t.stage].push(t);
+    else byStage.proposed.push(t);
+  }
+  for (const [stage, list] of Object.entries(byStage)) {
+    const cardsEl = $(`kanban-${stage}`);
+    cardsEl.innerHTML = "";
+    const countEl = $(`count-${stage}`);
+    countEl.textContent = list.length ? String(list.length) : "";
+    if (list.length === 0) {
+      const empty = el("div", "kanban-empty");
+      empty.textContent = t("taskEmpty");
+      cardsEl.appendChild(empty);
+      continue;
+    }
+    for (const task of list) {
+      cardsEl.appendChild(buildTaskCard(task));
+    }
+  }
+}
+
+function buildTaskCard(task) {
+  const card = el("div", `kanban-card stage-${task.stage}`);
+  card.dataset.id = task.id;
+
+  const title = el("div", "k-title");
+  title.textContent = task.title;
+
+  const meta = el("div", "k-meta");
+  const idEl = el("span", "k-id");
+  idEl.textContent = task.id;
+  meta.appendChild(idEl);
+  if (task.branch) {
+    const br = el("span", "k-branch");
+    br.textContent = task.branch;
+    meta.appendChild(br);
+  }
+  if (task.git?.commitCount) {
+    const cc = el("span", "k-commits");
+    cc.textContent = `${task.git.commitCount} commits`;
+    meta.appendChild(cc);
+  }
+  if (task.git?.uncommittedCount) {
+    const uc = el("span", "k-dirty");
+    uc.textContent = `●${task.git.uncommittedCount} ${t("taskUncommitted")}`;
+    meta.appendChild(uc);
+  }
+  if (task.git?.ahead) {
+    const ah = el("span", "k-dirty");
+    ah.textContent = `↑${task.git.ahead}`;
+    meta.appendChild(ah);
+  }
+
+  const actions = el("div", "k-actions");
+  const btn = (label, prompt) => {
+    const b = el("button", "btn btn-sm");
+    b.textContent = label;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      taskPrompt(prompt);
+    });
+    return b;
+  };
+  if (task.stage === "proposed") {
+    actions.appendChild(btn(t("taskStart"), `开始任务 ${task.id}（用 task_start 工具）`));
+  } else if (task.stage === "in_progress") {
+    actions.appendChild(btn(t("taskCommit"), `提交任务 ${task.id} 的改动（用 git_commit 工具）`));
+    actions.appendChild(btn(t("taskRequestReview"), `完成任务 ${task.id} 并请求审核（用 task_complete 工具，先确保已提交）`));
+  } else if (task.stage === "pending_review") {
+    actions.appendChild(btn(t("taskApprove"), `确认任务 ${task.id} 完成（用 task_approve 工具）`));
+    actions.appendChild(btn(t("taskResume"), `继续修改任务 ${task.id}（用 task_start 工具）`));
+  }
+
+  const detail = el("div", "k-detail");
+  detail.hidden = true;
+  if (task.description) {
+    const desc = el("div", "k-desc");
+    desc.textContent = task.description;
+    detail.appendChild(desc);
+  }
+  if (task.git?.lastCommit) {
+    const lc = el("div", "k-last");
+    lc.textContent = `${task.git.lastCommit.hash} ${task.git.lastCommit.date} · ${task.git.lastCommit.subject}`;
+    detail.appendChild(lc);
+  }
+
+  title.addEventListener("click", () => {
+    detail.hidden = !detail.hidden;
+  });
+
+  card.append(title, meta, actions, detail);
+  return card;
+}
+
+function newTaskModal() {
+  const inp = document.createElement("input");
+  inp.placeholder = t("taskNewPlaceholder");
+  showModal({
+    title: t("taskNewTitle"),
+    body: inp,
+    actions: [
+      {
+        label: t("ok"),
+        primary: true,
+        onClick: () => {
+          const title = inp.value.trim();
+          if (title) taskPrompt(`帮我创建一个新任务：${title}（用 task_create 工具）`);
+        },
+      },
+      { label: t("cancel") },
+    ],
+  });
+  setTimeout(() => inp.focus(), 60);
+}
+
+/* ==========================================================================
    Wire up the UI
    ========================================================================== */
 
@@ -1982,6 +2384,26 @@ function init() {
     if (e.target === settingsPanel) closeSettings();
   });
   $("btn-cred-save").addEventListener("click", saveCredential);
+
+  // git panel
+  $("btn-git").addEventListener("click", openGitPanel);
+  $("btn-git-close").addEventListener("click", closeGitPanel);
+  $("btn-git-refresh").addEventListener("click", refreshGit);
+  gitPanel.addEventListener("mousedown", (e) => {
+    if (e.target === gitPanel) closeGitPanel();
+  });
+  $("btn-git-commit").addEventListener("click", () => gitPrompt(GIT_PROMPTS.commit));
+  $("btn-git-push").addEventListener("click", () => gitPrompt(GIT_PROMPTS.push));
+  $("btn-git-release").addEventListener("click", () => gitPrompt(GIT_PROMPTS.release));
+
+  // kanban
+  $("btn-kanban").addEventListener("click", toggleKanban);
+  $("btn-kanban-refresh").addEventListener("click", refreshTasks);
+  $("btn-kanban-chat").addEventListener("click", () => {
+    if (kanbanView) toggleKanban();
+  });
+  $("btn-task-new").addEventListener("click", newTaskModal);
+
   // common providers for the datalist autocomplete
   ["anthropic", "openai", "google", "deepseek", "openrouter", "mistral", "groq", "xai", "together", "moonshot", "ollama", "bedrock", "azure", "github", "zhipu", "qwen", "kimi"].forEach((p) => {
     const opt = document.createElement("option");
@@ -2160,6 +2582,8 @@ function init() {
   // start
   openEventStream();
   setInterval(refreshStats, 15000);
+  setInterval(refreshGit, 20000);
+  setInterval(refreshTasks, 30000);
 }
 
 init();

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,6 +52,56 @@ func agentVersion() string {
 		return "0.1.0"
 	}
 	return v
+}
+
+var (
+	gitMarkerCache   string
+	gitMarkerCacheAt time.Time
+)
+
+// gitMarker returns a compact working-tree marker for the process cwd:
+// "" when not a git repository, "main" when clean, "main ●" when dirty.
+// Cached for a few seconds because it is called on every TUI render.
+func gitMarker() string {
+	if time.Since(gitMarkerCacheAt) < 5*time.Second {
+		return gitMarkerCache
+	}
+	gitMarkerCache = computeGitMarker()
+	gitMarkerCacheAt = time.Now()
+	return gitMarkerCache
+}
+
+func computeGitMarker() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", cwd, "status", "--porcelain", "-b").Output()
+	if err != nil {
+		return ""
+	}
+	branch := ""
+	dirty := false
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "## ") {
+			head := strings.TrimPrefix(line, "## ")
+			branch = head
+			if i := strings.Index(branch, "..."); i >= 0 {
+				branch = branch[:i]
+			}
+			continue
+		}
+		if line != "" {
+			dirty = true
+		}
+	}
+	if branch == "" {
+		return ""
+	}
+	if dirty {
+		return branch + " ●"
+	}
+	return branch
 }
 
 // ListSessions scans the session store: one newest file per session dir,

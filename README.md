@@ -32,10 +32,17 @@ Miro 是基于 [Pi Agent](https://github.com/earendil-works/pi) 二次定制开�
 
 | 能力 | 说明 | 入口 |
 |---|---|---|
-| **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理 | `/web` |
+| **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理、Git 面板 | `/web` |
 | **Subagents** | 子代理并行/串行协作 | `/run` `/parallel` |
 | **Tasks** | 工作流任务 + 重启自动续跑 | `/task` |
 | **Goal** | 目标 + 列表 + 审计 + 循环优化 | `/goal` `/list` `/loop` |
+| **Git** | 智能提交、仓库状态、发布流程（版本 bump → tag → push → GitHub Release） | `/commit` `/git` `/release` |
+| **任务看板** | Git 创作的 4 阶段任务流：提出 → 进行中 → 待审核 → 已完成 | Web 看板 / `/task-new` |
+| **MCP** | 接入 MCP 服务器生态（浏览器、文件系统等），工具即插即用 | `~/.miro/agent/mcp.json` / `/mcp` |
+| **浏览器自动化** | 基于 playwright-cli 的 token 高效浏览器操作 | playwright-cli 技能 |
+| **计划模式 + 检查点** | 先计划后执行 + git 快照回滚 | `/plan` `/git_checkpoint` |
+| **沙箱执行** | bwrap 轻量沙箱跑不可信命令 | `bash_sandbox` |
+| **PR 审查** | 拉取 PR diff 并提交审查意见 | `pr_review` `pr_review_post` |
 
 ## 架构
 
@@ -47,7 +54,7 @@ Miro 不是扩展集合，而是自带一份**白标化的 Pi Agent 引擎**：
 ├── core/             # 本地 Pi Agent 引擎副本（经官方 piConfig 白标）
 └── agent/            # Miro 家目录（会话、凭据、主题、扩展）
     ├── AGENTS.md     # Miro 身份与行为准则
-    ├── extensions/   # miro-web、miro-brand、auto-task-resume
+    ├── extensions/   # miro-web、miro-brand、auto-task-resume、miro-git、miro-task
     └── themes/       # miro-dark / miro-light / miro-opencode
 ```
 

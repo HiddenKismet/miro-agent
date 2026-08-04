@@ -48,6 +48,9 @@ type Model struct {
 	// session picker for /resume
 	picker *sessionPickerState
 
+	// task board overlay for /kanban
+	board *taskBoardState
+
 	// tool status badges: toolCallId → "running" | "ok" | "error"
 	toolStatus map[string]string
 
@@ -149,16 +152,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.picker.active = false
 				m.picker = nil
 				return m, nil
-			case "ctrl+c":
-				m.picker.active = false
-				m.picker = nil
-				m.ctrlCAt = time.Now() // count as the first press of a double-tap
-				return m, nil
-			default:
-				return m, nil // swallow other keys while picking
-			}
+		case "ctrl+c":
+			m.picker.active = false
+			m.picker = nil
+			m.ctrlCAt = time.Now() // count as the first press of a double-tap
+			return m, nil
+		default:
+			return m, nil // swallow other keys while picking
 		}
-		// slash-command menu keys take priority while the menu is open
+	}
+	// task board overlay keys take priority next
+	if m.board != nil && m.board.active {
+		switch msg.String() {
+		case "up":
+			idx := m.board.selected
+			for {
+				idx--
+				if idx < 0 {
+					idx = len(m.board.rows) - 1
+				}
+				if !m.board.rows[idx].header {
+					break
+				}
+			}
+			m.board.selected = idx
+			return m, nil
+		case "down":
+			idx := m.board.selected
+			for {
+				idx++
+				if idx >= len(m.board.rows) {
+					idx = 0
+				}
+				if !m.board.rows[idx].header {
+					break
+				}
+			}
+			m.board.selected = idx
+			return m, nil
+		case "enter":
+			ri := m.board.rows[m.board.selected]
+			if ri.header || ri.idx < 0 || ri.idx >= len(m.board.tasks) {
+				return m, nil
+			}
+			task := m.board.tasks[ri.idx]
+			text := "继续任务 " + task.ID
+			m.board.active = false
+			m.board = nil
+			m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
+			m.textarea.SetValue("")
+			m.busy = true
+			if err := m.client.SendUserMessage(text); err != nil {
+				m.err = err
+				m.busy = false
+			}
+			return m, nil
+		case "esc", "ctrl+c":
+			m.board.active = false
+			m.board = nil
+			m.ctrlCAt = time.Now()
+			return m, nil
+		default:
+			return m, nil // swallow other keys while the board is open
+		}
+	}
+	// slash-command menu keys take priority while the menu is open
 		if m.menu.active && len(m.menu.matches) > 0 {
 			switch msg.String() {
 			case "up":
@@ -237,6 +295,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cancelled, _ := resp["data"].(map[string]any)["cancelled"].(bool)
 					return switchResultMsg{label: "/new", cancelled: cancelled}
 				}
+			}
+
+			// /kanban → open the full-screen task board overlay instead of sending
+			if text == "/kanban" || strings.HasPrefix(text, "/kanban ") {
+				m.textarea.SetValue("")
+				m.menu.reset()
+				tasks := ListTasks()
+				if len(tasks) == 0 {
+					m.lines = append(m.lines, chatLine{kind: kindInfo, text: "⚠ 还没有任务（在对话里说「创建任务：…」即可提出）"})
+					return m, nil
+				}
+				m.board = openTaskBoard(tasks)
+				return m, nil
 			}
 
 			m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
@@ -614,15 +685,59 @@ func (m Model) View() string {
 			Render(strings.Join(lines, "\n")) + "\n"
 	}
 
+	// task board overlay (/kanban)
+	board := ""
+	if m.board != nil && m.board.active {
+		bl := make([]string, 0, len(m.board.rows)+2)
+		for ri, row := range m.board.rows {
+			if row.header {
+				bl = append(bl, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(" ▸ "+row.label))
+				continue
+			}
+			t := m.board.tasks[row.idx]
+			prefix := "   "
+			style := lipgloss.NewStyle().Foreground(colorMuted)
+			if ri == m.board.selected {
+				prefix = " ❯ "
+				style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+			meta := t.Branch
+			if t.CommitCount > 0 {
+				meta += fmt.Sprintf(" · %d commits", t.CommitCount)
+			}
+			if t.Uncommitted > 0 {
+				meta += fmt.Sprintf(" · ●%d", t.Uncommitted)
+			}
+			if t.Repo != "" {
+				meta += " · " + t.Repo
+			}
+			metaLine := lipgloss.NewStyle().Foreground(colorDim).Render(meta)
+			bl = append(bl, style.Render(prefix+t.ID+"  "+t.Title)+" "+metaLine)
+		}
+		bl = append(bl, "")
+		bl = append(bl, lipgloss.NewStyle().Foreground(colorDim).Render("Enter 继续该任务 · ↑↓ 选择 · Esc 关闭"))
+		board = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(strings.Join(bl, "\n")) + "\n"
+	}
+
 	// input + footer
 	input := styleInputBox.Width(m.width - 4).Render(m.textarea.View())
-	footer := styleFooter.Render(fmt.Sprintf("⌃C 中断 · 连按两次退出   ⌃D quit   • Miro TUI v%s", agentVersion()))
+	gitPart := ""
+	if gm := gitMarker(); gm != "" {
+		gitPart = "   " + lipgloss.NewStyle().Foreground(colorAccent).Render(gm)
+	}
+	footer := styleFooter.Render(fmt.Sprintf("⌃C 中断 · 连按两次退出   ⌃D quit%s   • Miro TUI v%s", gitPart, agentVersion()))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		m.viewport.View(),
 		picker,
 		menu,
+		board,
 		input,
 		footer,
 	)

@@ -8,6 +8,8 @@
  *   POST /api/command    client -> engine (correlated via `id`, response awaited)
  *   GET  /api/events     engine -> client (Server-Sent Events stream)
  *   GET  /api/sessions   list saved sessions (read from the session dir)
+ *   GET  /api/git        read-only git data for the web panel (?op=status|log|diff|branch)
+ *   GET  /api/tasks      task board: registry + git metadata
  *   GET  /               the web UI (public/)
  *   GET  /vendor/*       vendored frontend libs (marked, highlight.js)
  *
@@ -20,7 +22,7 @@
  */
 
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, readdir, stat, writeFile, rename } from "node:fs/promises";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve, basename, extname, isAbsolute } from "node:path";
@@ -35,6 +37,7 @@ const HOME = os.homedir();
 const MIRO_HOME = process.env.MIRO_HOME || join(HOME, ".miro");
 const AGENT_DIR = process.env.MIRO_CODING_AGENT_DIR || join(MIRO_HOME, "agent");
 const AUTH_FILE = join(AGENT_DIR, "auth.json");
+const TASKS_DIR = join(AGENT_DIR, "tasks");
 // Cache-bust version for /app.js and /style.css: derived from the stylesheet
 // mtime so edits are picked up automatically without a manual bump.
 const ASSET_VERSION = (() => {
@@ -455,6 +458,187 @@ async function handleGetSettings(res) {
 }
 
 // ---------------------------------------------------------------------------
+// Git read-only endpoints (live data for the web git panel — no LLM involved)
+// ---------------------------------------------------------------------------
+
+const GIT_FLAGS = ["--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"];
+
+function execGit(cwd, args) {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      [...GIT_FLAGS, ...args],
+      { cwd, timeout: 20000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
+        resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+      },
+    );
+  });
+}
+
+function parseGitStatus(out) {
+  let branch = "";
+  let ahead = 0;
+  let behind = 0;
+  const staged = [];
+  const unstaged = [];
+  const untracked = [];
+  for (const line of out.split("\n")) {
+    if (line.startsWith("## ")) {
+      const head = line.slice(3);
+      branch = head.split("...")[0];
+      const m = /\[ahead (\d+)(?:, behind (\d+))?\]/.exec(head);
+      if (m) {
+        ahead = Number(m[1]);
+        behind = m[2] ? Number(m[2]) : 0;
+      } else {
+        const b = /\[behind (\d+)\]/.exec(head);
+        if (b) behind = Number(b[1]);
+      }
+      continue;
+    }
+    if (line.length < 3) continue;
+    const x = line[0];
+    const y = line[1];
+    const path = line.slice(3).trim();
+    if (x === "?" && y === "?") untracked.push({ status: "??", path });
+    else if (x !== " " && y !== " ") staged.push({ status: x, path });
+    else if (x !== " " && y === " ") staged.push({ status: x, path });
+    else if (x === " " && y !== " ") unstaged.push({ status: y, path });
+  }
+  return { branch, ahead, behind, staged, unstaged, untracked };
+}
+
+async function handleGit(req, res, url) {
+  const sub = url.searchParams.get("op") || "status";
+  const cwd = url.searchParams.get("cwd") || args.cwd;
+  let gitArgs;
+  if (sub === "status") {
+    gitArgs = ["status", "--porcelain=v1", "-b"];
+  } else if (sub === "log") {
+    const n = String(Math.min(100, Math.max(1, Number(url.searchParams.get("n")) || 15)));
+    gitArgs = ["log", "--format=%h|%ad|%an|%s", "--date=short", ...(url.searchParams.get("all") === "1" ? ["--all"] : []), "-n", n];
+  } else if (sub === "diff") {
+    const path = url.searchParams.get("path");
+    gitArgs = ["diff", "--no-ext-diff"];
+    if (url.searchParams.get("staged") === "1") gitArgs.push("--cached");
+    if (url.searchParams.get("stat") === "1") gitArgs.push("--stat");
+    if (path) gitArgs.push("--", path);
+  } else if (sub === "branch") {
+    gitArgs = ["branch", "-a"];
+  } else {
+    return sendJSON(res, 400, { error: "unknown op" });
+  }
+  const r = await execGit(cwd, gitArgs);
+  if (r.code !== 0) {
+    return sendJSON(res, 200, { ok: false, error: (r.stderr || r.stdout).trim(), code: r.code, cwd });
+  }
+  if (sub === "status") return sendJSON(res, 200, { ok: true, cwd, data: parseGitStatus(r.stdout) });
+  if (sub === "log")
+    return sendJSON(
+      res,
+      200,
+      {
+        ok: true,
+        cwd,
+        data: r.stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => {
+            const [hash, date, author, ...rest] = l.split("|");
+            return { hash, date, author, subject: rest.join("|") };
+          }),
+      },
+    );
+  if (sub === "diff") return sendJSON(res, 200, { ok: true, cwd, data: { text: r.stdout } });
+  if (sub === "branch")
+    return sendJSON(
+      res,
+      200,
+      {
+        ok: true,
+        cwd,
+        data: r.stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => ({ current: l.startsWith("*"), name: l.replace(/^[* ] /, "").trim() })),
+      },
+    );
+  return sendJSON(res, 400, { error: "unhandled op" });
+}
+
+// ---------------------------------------------------------------------------
+// Task board read endpoint (registry + git metadata for the web kanban)
+// ---------------------------------------------------------------------------
+
+async function gitInfoForTask(task, cwd) {
+  const info = { branch: task.branch || null, checkedOut: false, commitCount: 0, lastCommit: null, uncommittedCount: 0, ahead: 0, behind: 0, main: null };
+  if (!task.branch) return info;
+  const head = await execGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  info.checkedOut = head.code === 0 && head.stdout.trim() === task.branch;
+  const cnt = await execGit(cwd, ["rev-list", "--count", task.branch]);
+  if (cnt.code === 0) info.commitCount = Number(cnt.stdout.trim()) || 0;
+  const last = await execGit(cwd, ["log", "-1", "--format=%h|%ad|%s", "--date=short", task.branch]);
+  if (last.code === 0 && last.stdout.trim()) {
+    const [hash, date, ...rest] = last.stdout.trim().split("|");
+    info.lastCommit = { hash, date, subject: rest.join("|") };
+  }
+  if (info.checkedOut) {
+    const st = await execGit(cwd, ["status", "--porcelain"]);
+    if (st.code === 0) info.uncommittedCount = st.stdout.trim() ? st.stdout.trim().split("\n").filter(Boolean).length : 0;
+  }
+  for (const main of ["main", "master"]) {
+    const m = await execGit(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${main}`]);
+    if (m.code === 0) {
+      const a = await execGit(cwd, ["rev-list", "--count", `${main}..${task.branch}`]);
+      const b = await execGit(cwd, ["rev-list", "--count", `${task.branch}..${main}`]);
+      info.ahead = a.code === 0 ? Number(a.stdout.trim()) || 0 : 0;
+      info.behind = b.code === 0 ? Number(b.stdout.trim()) || 0 : 0;
+      info.main = main;
+      break;
+    }
+  }
+  return info;
+}
+
+async function handleTasks(req, res, url) {
+  const cwd = url.searchParams.get("cwd") || args.cwd;
+  const all = url.searchParams.get("all") === "1";
+  let tasks = [];
+  try {
+    const files = await readdir(TASKS_DIR);
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        tasks.push(JSON.parse(await readFile(join(TASKS_DIR, f), "utf8")));
+      } catch {
+        /* skip malformed */
+      }
+    }
+  } catch {
+    /* no tasks dir yet */
+  }
+  const rows = [];
+  for (const t of tasks) {
+    if (!t || !t.id) continue;
+    if (!all && t.cwd && t.cwd !== cwd) continue;
+    rows.push({
+      id: t.id,
+      title: t.title,
+      description: t.description || "",
+      stage: t.stage,
+      branch: t.branch || null,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      git: await gitInfoForTask(t, t.cwd || cwd),
+    });
+  }
+  rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  sendJSON(res, 200, { ok: true, cwd, tasks: rows });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
@@ -603,6 +787,22 @@ const server = http.createServer(async (req, res) => {
     try {
       const sessions = await listSessions();
       return sendJSON(res, 200, { sessions });
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  if (req.method === "GET" && path === "/api/git") {
+    try {
+      return await handleGit(req, res, url);
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  if (req.method === "GET" && path === "/api/tasks") {
+    try {
+      return await handleTasks(req, res, url);
     } catch (e) {
       return sendJSON(res, 500, { error: e.message });
     }
