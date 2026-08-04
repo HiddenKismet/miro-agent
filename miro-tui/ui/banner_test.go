@@ -30,6 +30,9 @@ func TestMiroBannerIsTerminalSafe(t *testing.T) {
 
 func TestStartupBannerDoesNotStartScrolledToBottom(t *testing.T) {
 	m := New(nil)
+	// Startup ticks/RPC events can refresh the viewport before the terminal
+	// sends its first WindowSizeMsg.
+	m.refreshViewport()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 13})
 	model := updated.(Model)
 	visible := stripANSI(model.viewport.View())

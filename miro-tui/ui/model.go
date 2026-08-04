@@ -202,9 +202,11 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	initialWindowSize := false
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		initialWindowSize = m.width == 0
 		m.width = msg.Width
 		m.height = msg.Height
 
@@ -547,6 +549,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.layout()
 	_, resizing := msg.(tea.WindowSizeMsg)
 	m.refreshViewport(!resizing)
+	if initialWindowSize {
+		m.viewport.GotoTop()
+	}
 
 	return m, tea.Batch(cmds...)
 }
