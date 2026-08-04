@@ -24,7 +24,7 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { readFile, readdir, stat, writeFile, rename } from "node:fs/promises";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { join, dirname, resolve, basename, extname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -821,6 +821,32 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && path === "/api/restart") {
     restartPi();
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // Enter a project (or scratch) directory: restart the engine with a new cwd
+  // so new sessions and git operations land in the chosen directory.
+  if (req.method === "POST" && path === "/api/enter-project") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        return sendJSON(res, 400, { error: "Invalid JSON" });
+      }
+      const cwd = expandPath(String(data.cwd ?? "").trim());
+      if (!cwd) return sendJSON(res, 400, { error: "cwd is required" });
+      try {
+        mkdirSync(cwd, { recursive: true }); // ensure scratch dirs exist
+      } catch (e) {
+        return sendJSON(res, 500, { error: e.message });
+      }
+      args.cwd = cwd;
+      restartPi();
+      return sendJSON(res, 200, { ok: true, cwd });
+    });
+    return;
   }
 
   // Download a local file (e.g. /export output). Local tool — trust the user.

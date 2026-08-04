@@ -32,6 +32,18 @@ func main() {
 		coreBin = filepath.Join(home, "core", "node_modules", ".bin", "pi")
 	}
 
+	// Startup working-directory chooser (临时会话 / 进入项目), unless a
+	// --project flag or MIRO_PROJECT env is given.
+	dir, args, err := resolveStartDir(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miro: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Chdir(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "miro: cannot enter %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+
 	client, err := rpc.New(coreBin, args...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miro: %v\n", err)

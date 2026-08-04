@@ -225,3 +225,88 @@ func textFromContent(content any) string {
 	}
 	return ""
 }
+
+// IsGitRepo reports whether dir is the root of a git repository.
+func IsGitRepo(dir string) bool {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	return err == nil && strings.TrimSpace(string(out)) == dir
+}
+
+// sessionCwdOf reads a session file's header cwd (first "session" line).
+func sessionCwdOf(file string) string {
+	f, err := os.Open(file)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var obj map[string]any
+		if json.Unmarshal(sc.Bytes(), &obj) != nil {
+			continue
+		}
+		if obj["type"] != "session" {
+			continue
+		}
+		if cwd, ok := obj["cwd"].(string); ok {
+			return cwd
+		}
+		return ""
+	}
+	return ""
+}
+
+// ListProjectDirs returns distinct project directories (git repository roots)
+// derived from saved sessions' cwds, most-recently-used first. Used by the
+// startup "enter a project" chooser.
+func ListProjectDirs() []string {
+	root := sessionRoot()
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	latest := map[string]time.Time{}
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, d.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+				continue
+			}
+			p := filepath.Join(root, d.Name(), f.Name())
+			cwd := sessionCwdOf(p)
+			if cwd == "" {
+				continue
+			}
+			st, err := os.Stat(p)
+			if err != nil {
+				continue
+			}
+			if t, ok := latest[cwd]; !ok || st.ModTime().After(t) {
+				latest[cwd] = st.ModTime()
+			}
+		}
+	}
+	type proj struct {
+		cwd string
+		at  time.Time
+	}
+	var list []proj
+	for c, at := range latest {
+		if IsGitRepo(c) {
+			list = append(list, proj{c, at})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].at.After(list[j].at) })
+	out := make([]string, 0, len(list))
+	for _, p := range list {
+		out = append(out, p.cwd)
+	}
+	return out
+}

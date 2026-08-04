@@ -514,6 +514,14 @@ html, body {
 }
 .welcome-hints code:hover { color: var(--accent); border-color: var(--accent-border); }
 
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 22px;
+}
+.welcome-actions .btn { padding: 8px 20px; font-size: 13.5px; }
+
 .msg {
   display: flex;
   align-items: flex-start; /* avatar top-aligned with bubble */

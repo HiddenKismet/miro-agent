@@ -37,6 +37,12 @@ const I18N = {
     no: "否",
     welcomeTitle: "Miro",
     welcomeSub: "让 Miro 梳理你的思绪：捕捉碎片、推演思考、落地成事",
+    scratchSession: "临时会话",
+    enterProject: "进入项目",
+    projectPickerTitle: "选择项目",
+    manualPath: "手动输入路径",
+    projectPathPlaceholder: "项目路径…",
+    enteredProject: "已进入",
     settings: "设置",
     appearance: "外观",
     theme: "主题",
@@ -145,6 +151,12 @@ const I18N = {
     no: "No",
     welcomeTitle: "Miro",
     welcomeSub: "Let Miro sort your mind.",
+    scratchSession: "Scratch session",
+    enterProject: "Enter project",
+    projectPickerTitle: "Choose a project",
+    manualPath: "Enter a path",
+    projectPathPlaceholder: "Project path…",
+    enteredProject: "Entered",
     settings: "Settings",
     appearance: "Appearance",
     theme: "Theme",
@@ -1595,6 +1607,8 @@ const LOCAL_COMMANDS = [
   { name: "/kanban", desc: "打开创作看板", run: () => {
     if (!kanbanView) toggleKanban();
   } },
+  { name: "/project", desc: "进入项目目录", run: enterProject },
+  { name: "/scratch", desc: "切换到临时会话目录", run: enterScratch },
 ];
 
 function handleLocalCommand(text) {
@@ -2317,6 +2331,79 @@ function newTaskModal() {
 }
 
 /* ==========================================================================
+   Enter project / scratch — restart the engine with a chosen working dir
+   ========================================================================== */
+
+function closeAllModals() {
+  $("modal-root").innerHTML = "";
+}
+
+async function enterProjectCwd(cwd) {
+  try {
+    const r = await fetch("/api/enter-project", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ cwd }),
+    });
+    const d = await r.json();
+    if (d.ok) showToast(`${t("enteredProject")} ${d.cwd}`, "info");
+    else showToast(d.error || "enter failed", "error");
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+function enterScratch() {
+  enterProjectCwd("~/.miro/scratch");
+}
+
+function enterProject() {
+  const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
+  const body = el("div", "modal-options");
+  for (const c of cwds) {
+    const b = el("button", "modal-option");
+    b.textContent = c;
+    b.title = c;
+    b.addEventListener("click", () => {
+      closeAllModals();
+      enterProjectCwd(c);
+    });
+    body.appendChild(b);
+  }
+  const manual = el("button", "modal-option");
+  manual.textContent = t("manualPath");
+  manual.addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.placeholder = t("projectPathPlaceholder");
+    showModal({
+      title: t("manualPath"),
+      body: inp,
+      actions: [
+        {
+          label: t("ok"),
+          primary: true,
+          onClick: () => {
+            const p = inp.value.trim();
+            if (p) {
+              closeAllModals();
+              enterProjectCwd(p);
+            }
+          },
+        },
+        { label: t("cancel") },
+      ],
+    });
+    setTimeout(() => inp.focus(), 60);
+  });
+  body.appendChild(manual);
+  showModal({
+    title: t("projectPickerTitle"),
+    body,
+    actions: [{ label: t("cancel") }],
+  });
+}
+
+/* ==========================================================================
    Wire up the UI
    ========================================================================== */
 
@@ -2403,6 +2490,10 @@ function init() {
     if (kanbanView) toggleKanban();
   });
   $("btn-task-new").addEventListener("click", newTaskModal);
+
+  // welcome chooser: scratch session / enter project
+  $("btn-scratch").addEventListener("click", enterScratch);
+  $("btn-project").addEventListener("click", enterProject);
 
   // common providers for the datalist autocomplete
   ["anthropic", "openai", "google", "deepseek", "openrouter", "mistral", "groq", "xai", "together", "moonshot", "ollama", "bedrock", "azure", "github", "zhipu", "qwen", "kimi"].forEach((p) => {
