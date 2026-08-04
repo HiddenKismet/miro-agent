@@ -90,7 +90,7 @@ const ctrlCQuitWindow = 1200 * time.Millisecond
 // fullBannerMinHeight leaves room for the header, six-row logo, greeting,
 // input, and footer. Below this height, rendering the full logo would make
 // the terminal clip its bottom rows and look like a broken banner.
-const fullBannerMinHeight = 12
+const fullBannerMinHeight = 13
 
 // sessionPickerState renders the historical-session chooser.
 type sessionPickerState struct {
@@ -579,7 +579,11 @@ func (m *Model) layout() {
 	m.textarea.SetHeight(lines)
 
 	m.viewport.Width = m.width
-	h := m.height - 4 - lines // header(1) + footer(1) + input box
+	bannerRows := 0
+	if m.height >= fullBannerMinHeight {
+		bannerRows = strings.Count(miroBanner, "\n") + 1
+	}
+	h := m.height - 4 - lines - bannerRows // header + banner + footer + input box
 	if h < 3 {
 		h = 3
 	}
@@ -680,11 +684,7 @@ func (m *Model) refreshViewport(scrollBottom ...bool) {
 		case kindInfo:
 			b.WriteString(styleHeaderText.Render(l.text))
 		case kindBanner:
-			if m.height > 0 && m.height < fullBannerMinHeight {
-				b.WriteString("✦ Miro\n")
-			} else {
-				b.WriteString(m.bannerView() + "\n")
-			}
+			continue
 		}
 		b.WriteString("\n")
 	}
@@ -986,18 +986,17 @@ func (m Model) View() string {
 		gitPart = "   " + lipgloss.NewStyle().Foreground(colorAccent).Render(gm)
 	}
 	footer := styleFooter.Render(fmt.Sprintf("⌃C 中断 · 连按两次退出   ⌃D quit%s   • Miro TUI v%s", gitPart, agentVersion()))
-
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		m.viewport.View(),
-		picker,
-		menu,
-		pathMenu,
-		board,
-		ppicker,
-		input,
-		footer,
-	)
+	banner := ""
+	if m.height >= fullBannerMinHeight {
+		banner = m.bannerView()
+	}
+	sections := []string{header}
+	for _, section := range []string{banner, m.viewport.View(), picker, menu, pathMenu, board, ppicker, input, footer} {
+		if section != "" {
+			sections = append(sections, section)
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 // wrapText soft-wraps text to at most `width` runes per line, preserving

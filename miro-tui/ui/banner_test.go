@@ -34,13 +34,19 @@ func TestStartupBannerDoesNotStartScrolledToBottom(t *testing.T) {
 	// Startup ticks/RPC events can refresh the viewport before the terminal
 	// sends its first WindowSizeMsg.
 	m.refreshViewport()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 13})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 70})
 	model := updated.(Model)
 	updated, _ = model.Update(spinner.TickMsg{})
 	model = updated.(Model)
-	visible := stripANSI(model.viewport.View())
+	visible := stripANSI(model.View())
 	if !strings.Contains(visible, "███╗   ███╗") {
-		t.Fatalf("startup viewport starts below the first banner row: %q", visible)
+		t.Fatalf("startup view is missing the first banner row: %q", visible)
+	}
+	if strings.Contains(stripANSI(model.viewport.View()), "███╗   ███╗") {
+		t.Fatal("startup banner is still inside the scrollable viewport")
+	}
+	if rows := strings.Count(visible, "\n") + 1; rows > model.height {
+		t.Fatalf("startup view has %d rows for a %d-row terminal", rows, model.height)
 	}
 }
 
