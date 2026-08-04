@@ -545,7 +545,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	m.layout()
-	m.refreshViewport()
+	_, resizing := msg.(tea.WindowSizeMsg)
+	m.refreshViewport(!resizing)
 
 	return m, tea.Batch(cmds...)
 }
@@ -635,7 +636,7 @@ func (m *Model) selectSessionCmd() tea.Cmd {
 // refreshViewport rebuilds the message pane from the current lines.
 // Must run inside Update: View() has a value receiver, so mutations there
 // would be discarded.
-func (m *Model) refreshViewport() {
+func (m *Model) refreshViewport(scrollBottom ...bool) {
 	wrapWidth := m.width - 6
 	if wrapWidth < 10 {
 		wrapWidth = 10
@@ -686,7 +687,9 @@ func (m *Model) refreshViewport() {
 		b.WriteString("  " + m.spinner.View() + "\n")
 	}
 	m.viewport.SetContent(b.String())
-	m.viewport.GotoBottom()
+	if len(scrollBottom) == 0 || scrollBottom[0] {
+		m.viewport.GotoBottom()
+	}
 }
 
 // bannerView returns the colored startup banner, re-rendered only when the
@@ -820,9 +823,6 @@ func (m Model) View() string {
 	title := styleHeader.Render("✦ Miro")
 	meta := styleHeaderText.Render(fmt.Sprintf("  %s", m.sessionName))
 	header := lipgloss.JoinHorizontal(lipgloss.Left, title, meta)
-
-	// message pane
-	m.viewport.GotoBottom()
 
 	// session picker
 	picker := ""

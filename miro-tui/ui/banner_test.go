@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestMiroBannerIsTerminalSafe(t *testing.T) {
@@ -23,6 +25,16 @@ func TestMiroBannerIsTerminalSafe(t *testing.T) {
 	}
 	if strings.TrimSpace(clean) == "" {
 		t.Fatal("rendered banner is empty")
+	}
+}
+
+func TestStartupBannerDoesNotStartScrolledToBottom(t *testing.T) {
+	m := New(nil)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 13})
+	model := updated.(Model)
+	visible := stripANSI(model.viewport.View())
+	if !strings.Contains(visible, "███╗   ███╗") {
+		t.Fatalf("startup viewport starts below the first banner row: %q", visible)
 	}
 }
 
