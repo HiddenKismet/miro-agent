@@ -547,8 +547,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	m.layout()
-	_, resizing := msg.(tea.WindowSizeMsg)
-	m.refreshViewport(!resizing)
+	m.refreshViewport()
 	if initialWindowSize {
 		m.viewport.GotoTop()
 	}
@@ -647,6 +646,7 @@ func (m *Model) refreshViewport(scrollBottom ...bool) {
 		wrapWidth = 10
 	}
 	var b strings.Builder
+	wasAtBottom := m.viewport.AtBottom()
 	for _, l := range m.lines {
 		switch l.kind {
 		case kindUser:
@@ -692,7 +692,7 @@ func (m *Model) refreshViewport(scrollBottom ...bool) {
 		b.WriteString("  " + m.spinner.View() + "\n")
 	}
 	m.viewport.SetContent(b.String())
-	if len(scrollBottom) == 0 || scrollBottom[0] {
+	if (len(scrollBottom) == 0 && wasAtBottom) || (len(scrollBottom) > 0 && scrollBottom[0]) {
 		m.viewport.GotoBottom()
 	}
 }

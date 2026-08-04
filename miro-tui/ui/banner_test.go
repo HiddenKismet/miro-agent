@@ -5,6 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -35,6 +36,8 @@ func TestStartupBannerDoesNotStartScrolledToBottom(t *testing.T) {
 	m.refreshViewport()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 13})
 	model := updated.(Model)
+	updated, _ = model.Update(spinner.TickMsg{})
+	model = updated.(Model)
 	visible := stripANSI(model.viewport.View())
 	if !strings.Contains(visible, "███╗   ███╗") {
 		t.Fatalf("startup viewport starts below the first banner row: %q", visible)
