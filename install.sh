@@ -54,7 +54,9 @@ rm -rf "$AGENT_DIR/extensions/miro-web"
 cp -R "$TEMPLATE/extensions/miro-web" "$AGENT_DIR/extensions/miro-web"
 cp "$TEMPLATE/extensions/auto-task-resume.ts" "$AGENT_DIR/extensions/auto-task-resume.ts"
 cp "$TEMPLATE/extensions/miro-brand.ts" "$AGENT_DIR/extensions/miro-brand.ts"
-echo "  ✓ miro-web, auto-task-resume, miro-brand"
+mkdir -p "$AGENT_DIR/themes"
+cp "$TEMPLATE"/themes/*.json "$AGENT_DIR/themes/" 2>/dev/null || true
+echo "  ✓ miro-web, auto-task-resume, miro-brand, themes"
 
 # --- merge built-in packages into settings.json (preserves user settings) -----
 node - "$AGENT_DIR/settings.json" "npm:pi-subagents" "npm:@mjasnikovs/pi-task" "npm:pi-goal-list-loop-audit" <<'EOF'
@@ -64,6 +66,8 @@ const wanted = process.argv.slice(3);
 let settings = {};
 try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 settings.packages = [...new Set([...(settings.packages || []), ...wanted])];
+// Miro default theme when the user has not chosen one
+if (!settings.theme) settings.theme = "miro-dark";
 fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
 EOF
 echo "  ✓ settings.json packages: subagents, pi-task, glla (goal)"

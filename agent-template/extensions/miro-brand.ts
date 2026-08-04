@@ -1,13 +1,18 @@
 /**
- * Miro brand hook — gives Miro Personal Agent its identity at startup.
+ * Miro brand hook — gives Miro Personal Agent its identity.
  *
- * On session start it announces Miro ("Let Miro sort your mind") and, when
- * MIRO_AUTOWEB=1 is set, auto-launches Miro Web so the browser UI is ready
- * before the first message. The web server is detached (like /web), so it
- * survives this process and can be stopped with /web-stop.
+ * TUI customization (per docs/tui.md):
+ *   1. Mint pulsing ✦ working indicator while streaming
+ *   2. Persistent "✦ Miro" status in the footer area
+ *   3. Custom footer: usage stats + model + git branch + Miro signature
+ *
+ * Also announces Miro at session start and, when MIRO_AUTOWEB=1,
+ * auto-launches Miro Web (detached, survives this process).
  */
 
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,10 +27,63 @@ export default function (pi: ExtensionAPI) {
     if (fired) return;
     fired = true;
 
-    // Brand greeting — short, quiet, on-brand.
+    // ---- brand greeting -----------------------------------------------------
     ctx.ui.notify("Miro ✦ Let Miro sort your mind", "info");
 
-    // Optional: auto-start the browser UI.
+    // ---- terminal window title ------------------------------------------------
+    ctx.ui.setTitle("Miro ✦ Personal Agent");
+
+    // ---- mint pulse working indicator ---------------------------------------
+    // Frames are rendered verbatim, so colors come from the current theme.
+    ctx.ui.setWorkingIndicator({
+      frames: [
+        ctx.ui.theme.fg("dim", "✦"),
+        ctx.ui.theme.fg("muted", "✦"),
+        ctx.ui.theme.fg("accent", "✦"),
+        ctx.ui.theme.fg("muted", "✦"),
+      ],
+      intervalMs: 140,
+    });
+
+    // ---- persistent status ---------------------------------------------------
+    ctx.ui.setStatus("miro", ctx.ui.theme.fg("accent", "✦ Miro"));
+
+    // ---- custom footer: stats · model · branch · signature --------------------
+    ctx.ui.setFooter((tui, theme, footerData) => {
+      const unsub = footerData.onBranchChange(() => tui.requestRender());
+
+      return {
+        dispose: unsub,
+        invalidate() {},
+        render(width: number): string[] {
+          // usage stats from the current session branch
+          let input = 0,
+            output = 0,
+            cost = 0;
+          for (const e of ctx.sessionManager.getBranch()) {
+            if (e.type === "message" && e.message.role === "assistant") {
+              const m = e.message as AssistantMessage;
+              input += m.usage.input;
+              output += m.usage.output;
+              cost += m.usage.cost.total;
+            }
+          }
+          const fmt = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
+
+          const left = theme.fg("dim", `↑${fmt(input)} ↓${fmt(output)} $${cost.toFixed(3)}`);
+
+          const branch = footerData.getGitBranch();
+          const branchStr = branch ? ` ${theme.fg("dim", "(")}${theme.fg("muted", branch)}${theme.fg("dim", ")")}` : "";
+          const modelStr = ctx.model?.id ? ` ${theme.fg("dim", ctx.model.id)}` : "";
+          const right = `${theme.fg("accent", "✦")} ${theme.fg("muted", "Miro")}${modelStr}${branchStr}`;
+
+          const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
+          return [truncateToWidth(left + pad + right, width)];
+        },
+      };
+    });
+
+    // ---- optional: auto-start the browser UI ----------------------------------
     if (process.env.MIRO_AUTOWEB === "1") {
       const port = String(Number(process.env.MIRO_PORT) || 5175);
       try {
