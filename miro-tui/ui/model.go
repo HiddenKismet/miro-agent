@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -41,10 +42,27 @@ type Model struct {
 
 	menu slashMenuState
 
+	// session picker for /resume
+	picker *sessionPickerState
+
 	busy        bool
 	err         error
 	cwd         string
 	sessionName string
+}
+
+// sessionPickerState renders the historical-session chooser.
+type sessionPickerState struct {
+	active   bool
+	sessions []Session
+	selected int
+}
+
+// switchResultMsg reports the outcome of a session switch / new session.
+type switchResultMsg struct {
+	label     string
+	err       error
+	cancelled bool
 }
 
 // RPCMsg carries one pi RPC event into the bubbletea loop.
@@ -58,7 +76,7 @@ func New(client *rpc.Client) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Ask Miro anything… (Enter to send)"
 	ta.Focus()
-	ta.SetHeight(2)
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = "❯ "
 
@@ -95,6 +113,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// session picker keys take top priority
+		if m.picker != nil && m.picker.active {
+			switch msg.String() {
+			case "up":
+				m.picker.selected--
+				if m.picker.selected < 0 {
+					m.picker.selected = len(m.picker.sessions) - 1
+				}
+				return m, nil
+			case "down":
+				m.picker.selected++
+				if m.picker.selected >= len(m.picker.sessions) {
+					m.picker.selected = 0
+				}
+				return m, nil
+			case "enter":
+				return m, m.selectSessionCmd()
+			case "esc", "ctrl+c":
+				m.picker.active = false
+				m.picker = nil
+				return m, nil
+			default:
+				return m, nil // swallow other keys while picking
+			}
+		}
 		// slash-command menu keys take priority while the menu is open
 		if m.menu.active && len(m.menu.matches) > 0 {
 			switch msg.String() {
@@ -131,16 +174,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			text := strings.TrimSpace(m.textarea.Value())
-			if text != "" {
-				m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
+			if text == "" {
+				return m, nil
+			}
+
+			// /resume → open the session picker instead of sending
+			if text == "/resume" || strings.HasPrefix(text, "/resume ") {
+				sessions := ListSessions()
+				if len(sessions) == 0 {
+					m.lines = append(m.lines, chatLine{kind: kindInfo, text: "⚠ 没有找到历史会话"})
+					m.textarea.SetValue("")
+					return m, nil
+				}
+				m.picker = &sessionPickerState{active: true, sessions: sessions}
+				m.menu.reset()
 				m.textarea.SetValue("")
-				m.busy = true
-				if err := m.client.SendUserMessage(text); err != nil {
-					m.err = err
-					m.busy = false
+				return m, nil
+			}
+
+			// /new → RPC new_session, not a plain prompt
+			if text == "/new" {
+				m.textarea.SetValue("")
+				m.lines = append(m.lines, chatLine{kind: kindInfo, text: "↻ 新会话…"})
+				return m, func() tea.Msg {
+					resp, err := m.client.CallTimeout(map[string]any{"type": "new_session"}, 15*time.Second)
+					if err != nil {
+						return switchResultMsg{label: "/new", err: err}
+					}
+					cancelled, _ := resp["data"].(map[string]any)["cancelled"].(bool)
+					return switchResultMsg{label: "/new", cancelled: cancelled}
 				}
 			}
+
+			m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
+			m.textarea.SetValue("")
+			m.busy = true
+			if err := m.client.SendUserMessage(text); err != nil {
+				m.err = err
+				m.busy = false
+			}
 			return m, nil
+		}
+
+	case switchResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else if msg.cancelled {
+			m.lines = append(m.lines, chatLine{kind: kindInfo, text: "↷ 切换已取消"})
+		} else {
+			m.lines = append(m.lines, chatLine{kind: kindInfo, text: "✓ " + msg.label})
+			m.busy = false
 		}
 
 	case RPCMsg:
@@ -166,6 +249,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.refreshViewport()
 
 	return m, tea.Batch(cmds...)
+}
+
+// selectSessionCmd switches to the picked session via the RPC protocol.
+func (m *Model) selectSessionCmd() tea.Cmd {
+	if m.picker == nil || len(m.picker.sessions) == 0 {
+		return nil
+	}
+	if m.picker.selected < 0 || m.picker.selected >= len(m.picker.sessions) {
+		return nil
+	}
+	sel := m.picker.sessions[m.picker.selected]
+	label := sel.Name
+	if label == "" {
+		label = sel.Path
+	}
+	m.picker.active = false
+	m.picker = nil
+	m.lines = append(m.lines, chatLine{kind: kindInfo, text: "↻ 切换会话: " + label})
+
+	return func() tea.Msg {
+		resp, err := m.client.CallTimeout(map[string]any{
+			"type":        "switch_session",
+			"sessionPath": sel.Path,
+		}, 20*time.Second)
+		if err != nil {
+			return switchResultMsg{label: label, err: err}
+		}
+		cancelled := false
+		if data, ok := resp["data"].(map[string]any); ok {
+			cancelled, _ = data["cancelled"].(bool)
+		}
+		return switchResultMsg{label: label, cancelled: cancelled}
+	}
 }
 
 // refreshViewport rebuilds the message pane from the current lines.
@@ -291,6 +407,44 @@ func (m Model) View() string {
 	// message pane
 	m.viewport.GotoBottom()
 
+	// session picker
+	picker := ""
+	if m.picker != nil && m.picker.active && len(m.picker.sessions) > 0 {
+		items := make([]string, 0, len(m.picker.sessions)+1)
+		header := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("会话历史 — ↑↓ 选择 · Enter 恢复 · Esc 取消")
+		items = append(items, header)
+		show := m.picker.sessions
+		if len(show) > 9 {
+			show = show[:9]
+		}
+		for i, s := range show {
+			prefix := "  "
+			style := lipgloss.NewStyle().Foreground(colorMuted)
+			if i == m.picker.selected {
+				prefix = "❯ "
+				style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+			name := s.Name
+			if name == "" {
+				name = s.Path
+			}
+			preview := []rune(s.Preview)
+			if len(preview) > 42 {
+				preview = append(preview[:42], []rune("…")...)
+			}
+			ts := s.ModTime.Format("01-02 15:04")
+			line := style.Render(prefix+name) +
+				" " + lipgloss.NewStyle().Foreground(colorDim).Render(string(preview)+" · "+ts)
+			items = append(items, line)
+		}
+		picker = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(strings.Join(items, "\n")) + "\n"
+	}
+
 	// slash-command menu
 	menu := ""
 	if m.menu.active && len(m.menu.matches) > 0 {
@@ -319,6 +473,7 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		m.viewport.View(),
+		picker,
 		menu,
 		input,
 		footer,

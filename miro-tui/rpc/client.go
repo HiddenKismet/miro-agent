@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Event is one JSONL line from pi stdout.
@@ -131,6 +132,78 @@ func (c *Client) SendUserMessage(text string) error {
 		"type":    "prompt",
 		"message": text,
 	})
+}
+
+// Call sends a command and blocks until the correlated response arrives.
+// Returns the response payload (or an error on timeout / process death).
+func (c *Client) Call(command map[string]any) (map[string]any, error) {
+	id := c.nextID.Add(1)
+	command["id"] = id
+	data, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if !c.alive {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("pi subprocess is not running")
+	}
+	ch := make(chan map[string]any, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+
+	if _, err = c.stdin.Write(append(data, '\n')); err != nil {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, err
+	}
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-c.done:
+		return nil, fmt.Errorf("pi subprocess exited")
+	}
+}
+
+// CallTimeout is Call with a timeout; a timeout removes the pending waiter.
+func (c *Client) CallTimeout(command map[string]any, timeout time.Duration) (map[string]any, error) {
+	id := c.nextID.Add(1)
+	command["id"] = id
+	data, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if !c.alive {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("pi subprocess is not running")
+	}
+	ch := make(chan map[string]any, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+
+	if _, err = c.stdin.Write(append(data, '\n')); err != nil {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, err
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-c.done:
+		return nil, fmt.Errorf("pi subprocess exited")
+	case <-timer.C:
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for response")
+	}
 }
 
 // Abort interrupts the current turn.
