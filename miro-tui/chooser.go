@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,16 +91,33 @@ type chooserModel struct {
 func (m chooserModel) Init() tea.Cmd { return nil }
 
 func (m chooserModel) recalc() {
-	q := strings.ToLower(string(m.filter))
+	q := string(m.filter)
 	m.items = m.all
-	if q != "" {
-		m.items = nil
+	if strings.TrimSpace(q) != "" {
+		type hit struct {
+			item  choiceItem
+			score int
+		}
+		var hits []hit
 		for _, it := range m.all {
-			if strings.Contains(strings.ToLower(it.label), q) ||
-				strings.Contains(strings.ToLower(it.hint), q) ||
-				strings.Contains(strings.ToLower(it.dir), q) {
-				m.items = append(m.items, it)
+			target := it.dir
+			if target == "" {
+				target = it.label
 			}
+			if ok, s := fuzzyMatch(q, target); ok {
+				hits = append(hits, hit{it, s})
+				continue
+			}
+			if it.hint != "" {
+				if ok, s := fuzzyMatch(q, it.hint); ok {
+					hits = append(hits, hit{it, s})
+				}
+			}
+		}
+		sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+		m.items = make([]choiceItem, 0, len(hits))
+		for _, h := range hits {
+			m.items = append(m.items, h.item)
 		}
 	}
 	if m.selected >= len(m.items) {
@@ -166,7 +184,7 @@ func (m chooserModel) View() string {
 			b.WriteString("    " + style.Render(it.hint) + "\n")
 		}
 	}
-	b.WriteString("\n  输入过滤 · ↑↓ 选择 · Enter 确认 · Esc 取消\n")
+	b.WriteString("\n  输入过滤（路径片段）· ↑↓ 选择 · Enter 确认 · Esc 取消\n")
 	return b.String()
 }
 

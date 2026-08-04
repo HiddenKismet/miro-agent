@@ -2366,6 +2366,33 @@ function relTime(ms) {
   return lang === "zh" ? `${Math.floor(s / 86400)} 天前` : `${Math.floor(s / 86400)}d ago`;
 }
 
+// VSCode quick-open style fuzzy path matcher (mirrors miro-tui/fuzzy.go).
+function fuzzyMatch(query, target) {
+  const q = query.toLowerCase().trim();
+  const t = target.toLowerCase();
+  if (!q) return { ok: true, score: 0 };
+  const terms = q.split(/[/\\ :]+/).filter(Boolean);
+  if (!terms.length) return { ok: true, score: 0 };
+  const isSeg = (i) => i === 0 || "/\\: .".includes(t[i - 1]);
+  const isWord = (i) => i === 0 || "-_. :/\\".includes(t[i - 1]);
+  let pos = 0, score = 0;
+  for (const term of terms) {
+    let ti = pos, prev = -1;
+    for (let qi = 0; qi < term.length; qi++) {
+      let j = t.indexOf(term[qi], ti);
+      if (j === -1) return { ok: false, score: 0 };
+      if (isSeg(j)) score += 15;
+      else if (isWord(j)) score += 8;
+      if (qi === 0) score += 5;
+      if (j === prev + 1) score += 6;
+      prev = j;
+      ti = j + 1;
+    }
+    pos = prev + 1;
+  }
+  return { ok: true, score };
+}
+
 function enterProject() {
   const body = el("div", "modal-options");
   const filter = document.createElement("input");
@@ -2377,15 +2404,24 @@ function enterProject() {
   body.appendChild(listEl);
 
   const applyFilter = () => {
-    const q = filter.value.toLowerCase();
+    const q = filter.value;
+    const entries = [];
     for (const opt of listEl.querySelectorAll(".modal-option")) {
-      opt.style.display = !q || (opt.dataset.search || "").includes(q) ? "" : "none";
+      const target = opt.dataset.path || opt.dataset.search || "";
+      const m = fuzzyMatch(q, target);
+      entries.push({ opt, show: m.ok, score: m.score });
+    }
+    entries.sort((a, b) => (a.show === b.show ? b.score - a.score : a.show ? -1 : 1));
+    for (const e of entries) {
+      e.opt.style.display = e.show ? "" : "none";
+      listEl.appendChild(e.opt); // reorder by score
     }
   };
 
   const addOption = (title, hint, cwd) => {
     const b = el("button", "modal-option");
-    b.dataset.search = `${title} ${hint} ${cwd}`.toLowerCase();
+    b.dataset.path = cwd || "";
+    b.dataset.search = `${title} ${hint}`.toLowerCase();
     const t = el("span", "p-name");
     t.textContent = title;
     b.appendChild(t);
