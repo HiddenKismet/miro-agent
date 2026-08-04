@@ -2357,45 +2357,85 @@ function enterScratch() {
   enterProjectCwd("~/.miro/scratch");
 }
 
+function relTime(ms) {
+  if (!ms) return "";
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return lang === "zh" ? "刚刚" : "just now";
+  if (s < 3600) return lang === "zh" ? `${Math.floor(s / 60)} 分钟前` : `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return lang === "zh" ? `${Math.floor(s / 3600)} 小时前` : `${Math.floor(s / 3600)}h ago`;
+  return lang === "zh" ? `${Math.floor(s / 86400)} 天前` : `${Math.floor(s / 86400)}d ago`;
+}
+
 function enterProject() {
-  const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
   const body = el("div", "modal-options");
-  for (const c of cwds) {
+  const addOption = (title, hint, cwd) => {
     const b = el("button", "modal-option");
-    b.textContent = c;
-    b.title = c;
+    const t = el("span", "p-name");
+    t.textContent = title;
+    b.appendChild(t);
+    if (hint) {
+      const h = el("span", "p-hint");
+      h.textContent = hint;
+      b.appendChild(h);
+    }
     b.addEventListener("click", () => {
       closeAllModals();
-      enterProjectCwd(c);
+      enterProjectCwd(cwd);
     });
     body.appendChild(b);
-  }
-  const manual = el("button", "modal-option");
-  manual.textContent = t("manualPath");
-  manual.addEventListener("click", () => {
-    const inp = document.createElement("input");
-    inp.placeholder = t("projectPathPlaceholder");
-    showModal({
-      title: t("manualPath"),
-      body: inp,
-      actions: [
-        {
-          label: t("ok"),
-          primary: true,
-          onClick: () => {
-            const p = inp.value.trim();
-            if (p) {
-              closeAllModals();
-              enterProjectCwd(p);
-            }
+  };
+  const addManual = () => {
+    const manual = el("button", "modal-option");
+    manual.textContent = t("manualPath");
+    manual.addEventListener("click", () => {
+      const inp = document.createElement("input");
+      inp.placeholder = t("projectPathPlaceholder");
+      showModal({
+        title: t("manualPath"),
+        body: inp,
+        actions: [
+          {
+            label: t("ok"),
+            primary: true,
+            onClick: () => {
+              const p = inp.value.trim();
+              if (p) {
+                closeAllModals();
+                enterProjectCwd(p);
+              }
+            },
           },
-        },
-        { label: t("cancel") },
-      ],
+          { label: t("cancel") },
+        ],
+      });
+      setTimeout(() => inp.focus(), 60);
     });
-    setTimeout(() => inp.focus(), 60);
-  });
-  body.appendChild(manual);
+    body.appendChild(manual);
+  };
+  addManual();
+
+  fetch("/api/projects", { headers: apiHeaders() })
+    .then((r) => r.json())
+    .then((d) => {
+      if (d.ok && d.projects && d.projects.length) {
+        for (const p of d.projects) {
+          const bits = [p.cwd];
+          if (p.branch) bits.push(p.branch);
+          if (p.dirty) bits.push(`●${p.dirty}`);
+          if (p.remote) bits.push(p.remote);
+          if (p.lastUsed) bits.push(relTime(p.lastUsed));
+          addOption(p.basename, bits.join(" · "), p.cwd);
+        }
+      } else {
+        const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
+        for (const c of cwds) addOption(c.split("/").pop() || c, c, c);
+      }
+    })
+    .catch(() => {
+      const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
+      for (const c of cwds) addOption(c.split("/").pop() || c, c, c);
+    });
+
   showModal({
     title: t("projectPickerTitle"),
     body,

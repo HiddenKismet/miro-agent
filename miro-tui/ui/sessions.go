@@ -257,10 +257,20 @@ func sessionCwdOf(file string) string {
 	return ""
 }
 
-// ListProjectDirs returns distinct project directories (git repository roots)
-// derived from saved sessions' cwds, most-recently-used first. Used by the
-// startup "enter a project" chooser.
-func ListProjectDirs() []string {
+// Project is one selectable startup project with context hints so the user
+// does not have to remember full paths.
+type Project struct {
+	Dir      string
+	Branch   string
+	Dirty    int
+	Remote   string
+	LastUsed time.Time
+}
+
+// ListProjects returns distinct git-repository directories derived from saved
+// sessions' cwds, enriched with branch / dirty / remote hints, most-recently
+// used first. Used by the startup "enter a project" chooser.
+func ListProjects() []Project {
 	root := sessionRoot()
 	dirs, err := os.ReadDir(root)
 	if err != nil {
@@ -293,20 +303,35 @@ func ListProjectDirs() []string {
 			}
 		}
 	}
-	type proj struct {
-		cwd string
-		at  time.Time
-	}
-	var list []proj
+	list := make([]Project, 0, len(latest))
 	for c, at := range latest {
-		if IsGitRepo(c) {
-			list = append(list, proj{c, at})
+		if !IsGitRepo(c) {
+			continue
+		}
+		branch, dirty, remote := ProjectGitInfo(c)
+		list = append(list, Project{Dir: c, Branch: branch, Dirty: dirty, Remote: remote, LastUsed: at})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].LastUsed.After(list[j].LastUsed) })
+	return list
+}
+
+// ProjectGitInfo returns (branch, dirtyCount, originRemote) for a repo dir.
+func ProjectGitInfo(dir string) (string, int, string) {
+	branch := ""
+	if b, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		branch = strings.TrimSpace(string(b))
+	}
+	dirty := 0
+	if s, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output(); err == nil {
+		for _, l := range strings.Split(string(s), "\n") {
+			if strings.TrimSpace(l) != "" {
+				dirty++
+			}
 		}
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].at.After(list[j].at) })
-	out := make([]string, 0, len(list))
-	for _, p := range list {
-		out = append(out, p.cwd)
+	remote := ""
+	if r, err := exec.Command("git", "-C", dir, "config", "--get", "remote.origin.url").Output(); err == nil {
+		remote = strings.TrimSpace(string(r))
 	}
-	return out
+	return branch, dirty, remote
 }

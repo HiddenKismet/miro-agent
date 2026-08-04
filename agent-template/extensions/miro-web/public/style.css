@@ -522,6 +522,19 @@ html, body {
 }
 .welcome-actions .btn { padding: 8px 20px; font-size: 13.5px; }
 
+.modal-option { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.modal-option .p-name { font-weight: 600; }
+.modal-option .p-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
 .msg {
   display: flex;
   align-items: flex-start; /* avatar top-aligned with bubble */

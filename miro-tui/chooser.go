@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/HiddenKismet/miro-agent/miro-tui/ui"
 )
@@ -15,8 +17,45 @@ import (
 // choiceItem is one selectable startup option.
 type choiceItem struct {
 	label string
+	hint  string
 	dir   string
 	kind  string // "cwd" | "scratch" | "project" | "manual"
+}
+
+// humanTime renders a compact relative time for the hint line.
+func humanTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "刚刚"
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+	}
+}
+
+// projectHint builds the context line for a project item.
+func projectHint(p ui.Project) string {
+	parts := []string{p.Dir}
+	if p.Branch != "" {
+		parts = append(parts, p.Branch)
+	}
+	if p.Dirty > 0 {
+		parts = append(parts, fmt.Sprintf("●%d", p.Dirty))
+	}
+	if p.Remote != "" {
+		parts = append(parts, p.Remote)
+	}
+	if when := humanTime(p.LastUsed); when != "" {
+		parts = append(parts, when)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // scratchDir is where 临时会话 (scratch) records live.
@@ -76,10 +115,15 @@ func (m chooserModel) View() string {
 	b.WriteString("\n  " + m.title + "\n\n")
 	for i, it := range m.items {
 		mark := "  "
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 		if i == m.selected {
 			mark = "❯ "
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 		}
 		b.WriteString("  " + mark + it.label + "\n")
+		if it.hint != "" {
+			b.WriteString("    " + style.Render(it.hint) + "\n")
+		}
 	}
 	b.WriteString("\n  ↑↓ 选择 · Enter 确认 · Esc 取消\n")
 	return b.String()
@@ -126,10 +170,18 @@ func resolveStartDir(args []string) (string, []string, error) {
 
 	first := []choiceItem{}
 	if ui.IsGitRepo(cwd) {
-		first = append(first, choiceItem{label: "当前目录（在此项目）", dir: cwd, kind: "cwd"})
+		branch, dirty, _ := ui.ProjectGitInfo(cwd)
+		hint := cwd
+		if branch != "" {
+			hint += " · " + branch
+		}
+		if dirty > 0 {
+			hint += fmt.Sprintf(" · ●%d", dirty)
+		}
+		first = append(first, choiceItem{label: "当前目录（在此项目）", hint: hint, dir: cwd, kind: "cwd"})
 	}
 	first = append(first,
-		choiceItem{label: "临时会话 (scratch) · " + scratch, dir: scratch, kind: "scratch"},
+		choiceItem{label: "临时会话 (scratch)", hint: scratch, dir: scratch, kind: "scratch"},
 		choiceItem{label: "进入项目…", kind: "project"},
 	)
 
@@ -147,10 +199,10 @@ func resolveStartDir(args []string) (string, []string, error) {
 		return cwd, args, nil
 	}
 
-	projects := ui.ListProjectDirs()
+	projects := ui.ListProjects()
 	items := make([]choiceItem, 0, len(projects)+1)
 	for _, p := range projects {
-		items = append(items, choiceItem{label: filepath.Base(p), dir: p, kind: "project"})
+		items = append(items, choiceItem{label: filepath.Base(p.Dir), hint: projectHint(p), dir: p.Dir, kind: "project"})
 	}
 	items = append(items, choiceItem{label: "手动输入路径…", kind: "manual"})
 	p2, ok2 := runChooser("进入项目", items)

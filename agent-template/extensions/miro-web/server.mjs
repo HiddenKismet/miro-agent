@@ -604,8 +604,7 @@ async function gitInfoForTask(task, cwd) {
 
 async function handleTasks(req, res, url) {
   const cwd = url.searchParams.get("cwd") || args.cwd;
-  const all = url.searchParams.get("all") === "1";
-  let tasks = [];
+  const all = url.searchParams.get("all") === "1";  let tasks = [];
   try {
     const files = await readdir(TASKS_DIR);
     for (const f of files) {
@@ -636,6 +635,39 @@ async function handleTasks(req, res, url) {
   }
   rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   sendJSON(res, 200, { ok: true, cwd, tasks: rows });
+}
+
+// Project picker: distinct git-repository directories derived from saved
+// sessions' cwds, enriched with branch / dirty / remote / last-used hints so
+// the UI can show context instead of bare paths.
+async function handleProjects(req, res, url) {
+  const sessions = await listSessions();
+  const byCwd = new Map();
+  for (const s of sessions) {
+    if (!s.cwd) continue;
+    const cur = byCwd.get(s.cwd);
+    if (!cur || s.mtime > cur.mtime) byCwd.set(s.cwd, s);
+  }
+  const projects = [];
+  for (const [cwd, s] of byCwd) {
+    const top = await execGit(cwd, ["rev-parse", "--show-toplevel"]);
+    if (top.code !== 0) continue; // not a git repo
+    const root = top.stdout.trim();
+    const branchR = await execGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    const status = await execGit(cwd, ["status", "--porcelain"]);
+    const remoteR = await execGit(cwd, ["config", "--get", "remote.origin.url"]);
+    const dirty = status.code === 0 && status.stdout.trim() ? status.stdout.trim().split("\n").filter(Boolean).length : 0;
+    projects.push({
+      cwd: root,
+      basename: basename(root),
+      branch: branchR.code === 0 ? branchR.stdout.trim() : "",
+      dirty,
+      remote: remoteR.code === 0 ? remoteR.stdout.trim() : "",
+      lastUsed: s.mtime,
+    });
+  }
+  projects.sort((a, b) => b.lastUsed - a.lastUsed);
+  sendJSON(res, 200, { ok: true, projects });
 }
 
 // ---------------------------------------------------------------------------
@@ -803,6 +835,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && path === "/api/tasks") {
     try {
       return await handleTasks(req, res, url);
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  if (req.method === "GET" && path === "/api/projects") {
+    try {
+      return await handleProjects(req, res, url);
     } catch (e) {
       return sendJSON(res, 500, { error: e.message });
     }
