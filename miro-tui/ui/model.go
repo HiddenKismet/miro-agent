@@ -39,6 +39,8 @@ type Model struct {
 	textarea textarea.Model
 	spinner  spinner.Model
 
+	menu slashMenuState
+
 	busy        bool
 	err         error
 	cwd         string
@@ -93,6 +95,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// slash-command menu keys take priority while the menu is open
+		if m.menu.active && len(m.menu.matches) > 0 {
+			switch msg.String() {
+			case "up":
+				m.menu.selected--
+				if m.menu.selected < 0 {
+					m.menu.selected = len(m.menu.matches) - 1
+				}
+				return m, nil
+			case "down":
+				m.menu.selected++
+				if m.menu.selected >= len(m.menu.matches) {
+					m.menu.selected = 0
+				}
+				return m, nil
+			case "tab":
+				m.menu.complete(&m.textarea)
+				m.menu.update(m.textarea.Value())
+				return m, nil
+			case "esc":
+				m.menu.reset()
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "ctrl+d":
 			return m, tea.Quit
@@ -134,6 +160,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
+	m.menu.update(m.textarea.Value())
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	m.refreshViewport()
@@ -210,6 +237,12 @@ func (m *Model) handleRPC(evt rpc.Event) {
 		}
 	case "tool_execution_end":
 		// status marker handled on next message_update
+	case "extension_ui_request":
+		if method, _ := evt.Data["method"].(string); method == "notify" {
+			if text, ok := evt.Data["message"].(string); ok && text != "" {
+				m.lines = append(m.lines, chatLine{kind: kindInfo, text: text})
+			}
+		}
 	case "extension_error", "server_error":
 		if msg, ok := evt.Data["message"].(string); ok {
 			m.err = fmt.Errorf("%s", msg)
@@ -258,6 +291,27 @@ func (m Model) View() string {
 	// message pane
 	m.viewport.GotoBottom()
 
+	// slash-command menu
+	menu := ""
+	if m.menu.active && len(m.menu.matches) > 0 {
+		lines := make([]string, 0, len(m.menu.matches))
+		for i, c := range m.menu.matches {
+			prefix := "  "
+			style := lipgloss.NewStyle().Foreground(colorMuted)
+			if i == m.menu.selected {
+				prefix = "❯ "
+				style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+			lines = append(lines, style.Render(prefix+"/"+c.Name)+" "+lipgloss.NewStyle().Foreground(colorDim).Render(c.Desc))
+		}
+		menu = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBorder).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(strings.Join(lines, "\n")) + "\n"
+	}
+
 	// input + footer
 	input := styleInputBox.Width(m.width - 4).Render(m.textarea.View())
 	footer := styleFooter.Render(fmt.Sprintf("⌃C interrupt   ⌃D quit   • Miro TUI v0.1.0"))
@@ -265,6 +319,7 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		m.viewport.View(),
+		menu,
 		input,
 		footer,
 	)
