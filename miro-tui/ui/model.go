@@ -20,12 +20,14 @@ const (
 	kindUser lineKind = iota
 	kindAssistant
 	kindTool
+	kindThinking
 	kindInfo
 )
 
 type chatLine struct {
-	kind lineKind
-	text string
+	kind   lineKind
+	text   string
+	toolID string
 }
 
 // Model is the root bubbletea model.
@@ -44,6 +46,9 @@ type Model struct {
 
 	// session picker for /resume
 	picker *sessionPickerState
+
+	// tool status badges: toolCallId → "running" | "ok" | "error"
+	toolStatus map[string]string
 
 	busy        bool
 	err         error
@@ -296,7 +301,25 @@ func (m *Model) refreshViewport() {
 		case kindAssistant:
 			b.WriteString("  " + l.text)
 		case kindTool:
-			b.WriteString("  " + styleToolRun.Render(l.text))
+			badge := "◐"
+			if l.toolID != "" {
+				if st, ok := m.toolStatus[l.toolID]; ok {
+					switch st {
+					case "ok":
+						badge = "✓"
+					case "error":
+						badge = "✗"
+					}
+				}
+			}
+			b.WriteString("  " + styleToolRun.Render(badge+" "+l.text))
+		case kindThinking:
+			// dim reasoning preview, truncated to one short line
+			r := []rune(l.text)
+			if len(r) > 88 {
+				r = append(r[:88], []rune("…")...)
+			}
+			b.WriteString("  " + styleThinking.Render("▸ "+string(r)) + "\n")
 		case kindInfo:
 			b.WriteString(styleHeaderText.Render(l.text))
 		}
@@ -338,8 +361,9 @@ func (m *Model) handleRPC(evt rpc.Event) {
 		}
 		if role, _ := msg["role"].(string); role == "assistant" {
 			text := extractText(msg)
-			tools := extractToolSummary(msg)
-			m.replaceAssistant(text, tools)
+			tools := m.extractToolSummary(msg)
+			thinking := extractThinking(msg)
+			m.replaceAssistant(text, tools, thinking)
 		}
 	case "message_end":
 		m.busy = false
@@ -348,11 +372,25 @@ func (m *Model) handleRPC(evt rpc.Event) {
 	case "agent_start":
 		m.busy = true
 	case "tool_execution_start":
-		if name, ok := evt.Data["toolName"].(string); ok {
-			m.lines = append(m.lines, chatLine{kind: kindTool, text: "◐ " + name + " …"})
+		if id, ok := evt.Data["toolCallId"].(string); ok && id != "" {
+			if m.toolStatus == nil {
+				m.toolStatus = map[string]string{}
+			}
+			m.toolStatus[id] = "running"
+			m.refreshViewport()
 		}
 	case "tool_execution_end":
-		// status marker handled on next message_update
+		if id, ok := evt.Data["toolCallId"].(string); ok && id != "" {
+			if m.toolStatus == nil {
+				m.toolStatus = map[string]string{}
+			}
+			if isErr, _ := evt.Data["isError"].(bool); isErr {
+				m.toolStatus[id] = "error"
+			} else {
+				m.toolStatus[id] = "ok"
+			}
+			m.refreshViewport()
+		}
 	case "extension_ui_request":
 		if method, _ := evt.Data["method"].(string); method == "notify" {
 			if text, ok := evt.Data["message"].(string); ok && text != "" {
@@ -367,11 +405,14 @@ func (m *Model) handleRPC(evt rpc.Event) {
 }
 
 // replaceAssistant updates (or appends) the trailing assistant block.
-func (m *Model) replaceAssistant(text string, tools []string) {
+func (m *Model) replaceAssistant(text string, tools []chatLine, thinking string) {
 	block := []chatLine{}
-	for _, t := range tools {
-		block = append(block, chatLine{kind: kindTool, text: t})
+	if strings.TrimSpace(thinking) != "" {
+		for _, l := range strings.Split(strings.TrimRight(thinking, "\n"), "\n") {
+			block = append(block, chatLine{kind: kindThinking, text: l})
+		}
 	}
+	block = append(block, tools...)
 	if strings.TrimSpace(text) != "" {
 		for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
 			block = append(block, chatLine{kind: kindAssistant, text: l})
@@ -381,11 +422,11 @@ func (m *Model) replaceAssistant(text string, tools []string) {
 		return
 	}
 
-	// remove previous trailing assistant/tool lines from the current turn
+	// remove previous trailing assistant/tool/thinking lines from the current turn
 	i := len(m.lines)
 	for i > 0 {
 		k := m.lines[i-1].kind
-		if k == kindAssistant || k == kindTool {
+		if k == kindAssistant || k == kindTool || k == kindThinking {
 			i--
 			continue
 		}
@@ -498,10 +539,12 @@ func extractText(msg map[string]any) string {
 	return strings.Join(parts, "\n")
 }
 
-// extractToolSummary lists toolCall blocks as "▣ name" lines.
-func extractToolSummary(msg map[string]any) []string {
+// extractToolSummary lists toolCall blocks as chatLine{kind: kindTool}.
+// The status badge is applied at render time from m.toolStatus, so late
+// tool_execution_end events update the badge without rebuilding the lines.
+func (m *Model) extractToolSummary(msg map[string]any) []chatLine {
 	content, _ := msg["content"].([]any)
-	out := []string{}
+	out := []chatLine{}
 	for _, c := range content {
 		block, ok := c.(map[string]any)
 		if !ok {
@@ -512,9 +555,28 @@ func extractToolSummary(msg map[string]any) []string {
 			if name == "" {
 				name = "tool"
 			}
-			out = append(out, "▣ "+name)
+			id, _ := block["id"].(string)
+			out = append(out, chatLine{kind: kindTool, text: name, toolID: id})
 		}
 	}
 	return out
+}
+
+// extractThinking joins all thinking blocks (dimmed reasoning preview).
+func extractThinking(msg map[string]any) string {
+	content, _ := msg["content"].([]any)
+	parts := []string{}
+	for _, c := range content {
+		block, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := block["type"].(string); t == "thinking" {
+			if s, ok := block["thinking"].(string); ok && s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 

@@ -29,6 +29,7 @@ var (
 	styleToolOK     = lipgloss.NewStyle().Foreground(colorGreen)
 	styleToolRun    = lipgloss.NewStyle().Foreground(colorOrange)
 	styleToolName   = lipgloss.NewStyle().Foreground(colorMuted)
+	styleThinking   = lipgloss.NewStyle().Foreground(colorDim).Italic(true)
 
 	styleFooter  = lipgloss.NewStyle().Foreground(colorDim).PaddingLeft(1)
 	styleInputBox = lipgloss.NewStyle().
