@@ -13,6 +13,10 @@ export MIRO_HOME
 export MIRO_CODING_AGENT_DIR="$MIRO_HOME/agent"
 export MIRO_CORE_BIN="$CORE_BIN"
 
+# Browser automation defaults to the downloaded Playwright chromium build
+# rather than the system Google Chrome channel (which may not be installed).
+export PLAYWRIGHT_MCP_BROWSER=chromium
+
 if [ ! -d "$MIRO_CODING_AGENT_DIR" ] || [ ! -x "$CORE_BIN" ]; then
   echo "Miro: installation incomplete." >&2
   [ ! -x "$CORE_BIN" ] && echo "  core engine missing: $CORE_BIN" >&2

@@ -4,7 +4,7 @@
 # Installs Miro into ~/.miro/:
 #   ~/.miro/bin/miro            launcher
 #   ~/.miro/agent/              agent home (built-in extensions + settings)
-#   ~/.miro/agent/extensions/   miro-web (Web UI), auto-task-resume, miro-brand
+#   ~/.miro/agent/extensions/   miro-web, auto-task-resume, miro-brand, miro-git, miro-task
 #
 # Usage:
 #   ./install.sh [--home ~/.miro]
@@ -51,11 +51,14 @@ fi
 rm -rf "$AGENT_DIR/extensions/miro-web"
 cp -R "$TEMPLATE/extensions/miro-web" "$AGENT_DIR/extensions/miro-web"
 rm -rf "$AGENT_DIR/extensions/miro-web/.pi-glla"   # runtime goal state — never ship it
-cp "$TEMPLATE/extensions/auto-task-resume.ts" "$AGENT_DIR/extensions/auto-task-resume.ts"
-cp "$TEMPLATE/extensions/miro-brand.ts" "$AGENT_DIR/extensions/miro-brand.ts"
+cp "$TEMPLATE/extensions/miro-git.ts" "$AGENT_DIR/extensions/miro-git.ts"
+cp "$TEMPLATE/extensions/miro-task.ts" "$AGENT_DIR/extensions/miro-task.ts"
+cp "$TEMPLATE/extensions/miro-mcp.ts" "$AGENT_DIR/extensions/miro-mcp.ts"
+cp "$TEMPLATE/extensions/miro-sandbox.ts" "$AGENT_DIR/extensions/miro-sandbox.ts"
+cp "$TEMPLATE/extensions/miro-pr.ts" "$AGENT_DIR/extensions/miro-pr.ts"
 mkdir -p "$AGENT_DIR/themes"
 cp "$TEMPLATE"/themes/*.json "$AGENT_DIR/themes/" 2>/dev/null || true
-echo "  ✓ miro-web, auto-task-resume, miro-brand, themes"
+echo "  ✓ miro-web, auto-task-resume, miro-brand, miro-git, miro-task, miro-mcp, miro-sandbox, miro-pr, themes"
 
 # --- merge built-in packages into settings.json (preserves user settings) -----
 node - "$AGENT_DIR/settings.json" "npm:pi-subagents" "npm:@mjasnikovs/pi-task" "npm:pi-goal-list-loop-audit" <<'EOF'
@@ -74,6 +77,22 @@ echo "  ✓ settings.json packages: subagents, pi-task, glla (goal)"
 # --- web UI frontend deps ------------------------------------------------------
 (cd "$AGENT_DIR/extensions/miro-web" && npm install --silent)
 echo "  ✓ miro-web dependencies"
+
+# --- MCP SDK (for the miro-mcp extension) --------------------------------------
+echo "  ⏳ installing MCP SDK (@modelcontextprotocol/client)..."
+(cd "$AGENT_DIR" && npm install --no-audit --no-fund @modelcontextprotocol/client --silent)
+echo "  ✓ MCP SDK"
+
+# --- Browser automation (playwright-cli + skill) --------------------------------
+echo "  ⏳ installing Playwright CLI (@playwright/cli)..."
+npm install -g --no-audit --no-fund @playwright/cli playwright >/dev/null 2>&1 || npm install -g @playwright/cli playwright
+mkdir -p "$AGENT_DIR/skills"
+rm -rf "$AGENT_DIR/skills/playwright-cli"
+cp -R "$(npm root -g)/@playwright/cli/skills/playwright-cli" "$AGENT_DIR/skills/playwright-cli"
+echo "  ✓ playwright-cli + skill"
+echo "  ⏳ downloading Chromium (~120MB)..."
+playwright install chromium >/dev/null 2>&1 || echo "  ⚠ chromium download failed (retry: playwright install chromium)"
+echo "  ⚠ if browser launch fails with missing libs, run once (sudo): playwright install-deps chromium"
 
 # --- Miro core: local white-labeled Pi Agent engine ---------------------------
 # A private copy of @earendil-works/pi-coding-agent, patched via its official
