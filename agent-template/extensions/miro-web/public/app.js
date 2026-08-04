@@ -2368,8 +2368,24 @@ function relTime(ms) {
 
 function enterProject() {
   const body = el("div", "modal-options");
+  const filter = document.createElement("input");
+  filter.placeholder = lang === "zh" ? "输入过滤…" : "Type to filter…";
+  filter.style.marginBottom = "8px";
+  body.appendChild(filter);
+
+  const listEl = el("div", "modal-options");
+  body.appendChild(listEl);
+
+  const applyFilter = () => {
+    const q = filter.value.toLowerCase();
+    for (const opt of listEl.querySelectorAll(".modal-option")) {
+      opt.style.display = !q || (opt.dataset.search || "").includes(q) ? "" : "none";
+    }
+  };
+
   const addOption = (title, hint, cwd) => {
     const b = el("button", "modal-option");
+    b.dataset.search = `${title} ${hint} ${cwd}`.toLowerCase();
     const t = el("span", "p-name");
     t.textContent = title;
     b.appendChild(t);
@@ -2382,10 +2398,11 @@ function enterProject() {
       closeAllModals();
       enterProjectCwd(cwd);
     });
-    body.appendChild(b);
+    listEl.appendChild(b);
   };
   const addManual = () => {
     const manual = el("button", "modal-option");
+    manual.dataset.search = t("manualPath").toLowerCase();
     manual.textContent = t("manualPath");
     manual.addEventListener("click", () => {
       const inp = document.createElement("input");
@@ -2410,7 +2427,7 @@ function enterProject() {
       });
       setTimeout(() => inp.focus(), 60);
     });
-    body.appendChild(manual);
+    listEl.appendChild(manual);
   };
   addManual();
 
@@ -2430,17 +2447,21 @@ function enterProject() {
         const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
         for (const c of cwds) addOption(c.split("/").pop() || c, c, c);
       }
+      applyFilter();
     })
     .catch(() => {
       const cwds = [...new Set((state.sessions || []).map((s) => s.cwd).filter(Boolean))];
       for (const c of cwds) addOption(c.split("/").pop() || c, c, c);
+      applyFilter();
     });
 
+  filter.addEventListener("input", applyFilter);
   showModal({
     title: t("projectPickerTitle"),
     body,
     actions: [{ label: t("cancel") }],
   });
+  setTimeout(() => filter.focus(), 60);
 }
 
 /* ==========================================================================

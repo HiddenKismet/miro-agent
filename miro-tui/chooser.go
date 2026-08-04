@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,31 +77,69 @@ func expandUser(p string) string {
 	return p
 }
 
-// chooserModel is a tiny bubbletea list for the startup picker.
+// chooserModel is an fzf-style list: type to filter, Enter to select. When the
+// filter matches nothing, Enter treats the typed text as a raw path.
 type chooserModel struct {
 	title    string
-	items    []choiceItem
+	all      []choiceItem
+	items    []choiceItem // filtered view
+	filter   []rune
 	selected int
 }
 
 func (m chooserModel) Init() tea.Cmd { return nil }
 
+func (m chooserModel) recalc() {
+	q := strings.ToLower(string(m.filter))
+	m.items = m.all
+	if q != "" {
+		m.items = nil
+		for _, it := range m.all {
+			if strings.Contains(strings.ToLower(it.label), q) ||
+				strings.Contains(strings.ToLower(it.hint), q) ||
+				strings.Contains(strings.ToLower(it.dir), q) {
+				m.items = append(m.items, it)
+			}
+		}
+	}
+	if m.selected >= len(m.items) {
+		m.selected = len(m.items) - 1
+	}
+	if m.selected < 0 && len(m.items) > 0 {
+		m.selected = 0
+	}
+}
+
 func (m chooserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
+		if len(msg.Runes) > 0 {
+			m.filter = append(m.filter, msg.Runes...)
+			m.recalc()
+			return m, nil
+		}
 		switch msg.String() {
 		case "up", "k":
-			m.selected--
-			if m.selected < 0 {
-				m.selected = len(m.items) - 1
+			if len(m.items) > 0 {
+				m.selected--
+				if m.selected < 0 {
+					m.selected = len(m.items) - 1
+				}
 			}
 		case "down", "j":
-			m.selected++
-			if m.selected >= len(m.items) {
-				m.selected = 0
+			if len(m.items) > 0 {
+				m.selected++
+				if m.selected >= len(m.items) {
+					m.selected = 0
+				}
 			}
 		case "enter":
 			return m, tea.Quit
-		case "esc", "q", "ctrl+c":
+		case "backspace":
+			if len(m.filter) > 0 {
+				m.filter = m.filter[:len(m.filter)-1]
+				m.recalc()
+			}
+		case "esc", "ctrl+c":
 			m.selected = -1
 			return m, tea.Quit
 		}
@@ -113,6 +150,10 @@ func (m chooserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m chooserModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n  " + m.title + "\n\n")
+	b.WriteString("  > " + string(m.filter) + "\n\n")
+	if len(m.items) == 0 {
+		b.WriteString("    " + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("（无匹配 · Enter 将输入作为路径）") + "\n")
+	}
 	for i, it := range m.items {
 		mark := "  "
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -125,30 +166,37 @@ func (m chooserModel) View() string {
 			b.WriteString("    " + style.Render(it.hint) + "\n")
 		}
 	}
-	b.WriteString("\n  ↑↓ 选择 · Enter 确认 · Esc 取消\n")
+	b.WriteString("\n  输入过滤 · ↑↓ 选择 · Enter 确认 · Esc 取消\n")
 	return b.String()
 }
 
-// runChooser shows a full-screen list and returns the picked item (ok=false
-// when the user cancels).
-func runChooser(title string, items []choiceItem) (choiceItem, bool) {
-	p := tea.NewProgram(chooserModel{title: title, items: items}, tea.WithAltScreen())
-	m, err := p.Run()
+// runChooser shows an fzf-style list. Returns:
+//   - the picked item (ok=true), or
+//   - rawPath: the typed text as a raw path when the filter matched nothing
+//     (ok=true, item empty), or
+//   - ok=false when cancelled.
+func runChooser(title string, all []choiceItem) (choiceItem, string, bool) {
+	m := chooserModel{title: title, all: all}
+	m.recalc()
+	p, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
-		return choiceItem{}, false
+		return choiceItem{}, "", false
 	}
-	cm := m.(chooserModel)
-	if cm.selected < 0 || cm.selected >= len(items) {
-		return choiceItem{}, false
+	cm := p.(chooserModel)
+	if cm.selected < 0 {
+		return choiceItem{}, "", false
 	}
-	return items[cm.selected], true
+	if len(cm.items) == 0 {
+		return choiceItem{}, string(cm.filter), true
+	}
+	return cm.items[cm.selected], "", true
 }
 
 // resolveStartDir picks the working directory before the engine starts.
 //
 // Priority: --project <path> | --project=<path> > MIRO_PROJECT > interactive
-// chooser (当前目录 / 临时会话 / 进入项目). Returns the chosen dir and the
-// remaining args with any --project flag removed.
+// fzf chooser (type to filter; typing a path and Enter also works). Returns
+// the chosen dir and the remaining args with any --project flag removed.
 func resolveStartDir(args []string) (string, []string, error) {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--project" && i+1 < len(args) {
@@ -185,38 +233,38 @@ func resolveStartDir(args []string) (string, []string, error) {
 		choiceItem{label: "进入项目…", kind: "project"},
 	)
 
-	picked, ok := runChooser("✦ Miro ✦ Personal Agent · 选择工作目录", first)
+	picked, raw, ok := runChooser("✦ Miro ✦ Personal Agent · 选择工作目录", first)
 	if !ok {
 		return "", args, fmt.Errorf("已取消")
 	}
-	if picked.kind == "scratch" {
+	if raw != "" {
+		return expandUser(strings.TrimSpace(raw)), args, nil
+	}
+	switch picked.kind {
+	case "cwd":
+		return cwd, args, nil
+	case "scratch":
 		if err := os.MkdirAll(scratch, 0o755); err != nil {
 			return "", args, err
 		}
 		return scratch, args, nil
 	}
-	if picked.kind == "cwd" {
-		return cwd, args, nil
-	}
 
 	projects := ui.ListProjects()
-	items := make([]choiceItem, 0, len(projects)+1)
+	items := make([]choiceItem, 0, len(projects))
 	for _, p := range projects {
 		items = append(items, choiceItem{label: filepath.Base(p.Dir), hint: projectHint(p), dir: p.Dir, kind: "project"})
 	}
-	items = append(items, choiceItem{label: "手动输入路径…", kind: "manual"})
-	p2, ok2 := runChooser("进入项目", items)
+	p2, raw2, ok2 := runChooser("进入项目（输入过滤，或直接输路径）", items)
 	if !ok2 {
 		return "", args, fmt.Errorf("已取消")
 	}
-	if p2.kind == "manual" {
-		fmt.Print("  项目路径: ")
-		r := bufio.NewReader(os.Stdin)
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return "", args, err
+	if raw2 != "" {
+		p := expandUser(strings.TrimSpace(raw2))
+		if p == "" {
+			return "", args, fmt.Errorf("未提供项目路径")
 		}
-		p2.dir = expandUser(strings.TrimSpace(line))
+		return p, args, nil
 	}
 	if p2.dir == "" {
 		return "", args, fmt.Errorf("未提供项目路径")

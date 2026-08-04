@@ -83,6 +83,7 @@ miro
 | `MIRO_AUTOWEB` | — | 设为 `1` 时启动即自动打开 Miro Web |
 | `MIRO_WEB_TOKEN` | 自动生成 | Miro Web 访问令牌 |
 | `MIRO_PROJECT` | — | TUI 启动时直接进入的项目目录（跳过启动选择器） |
+| `MIRO_PROJECTS` | — | 冒号分隔的项目扫描根目录（TUI 选择器自动发现项目） |
 
 ## 启动即选择工作目录
 

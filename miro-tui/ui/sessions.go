@@ -267,51 +267,106 @@ type Project struct {
 	LastUsed time.Time
 }
 
-// ListProjects returns distinct git-repository directories derived from saved
-// sessions' cwds, enriched with branch / dirty / remote hints, most-recently
-// used first. Used by the startup "enter a project" chooser.
-func ListProjects() []Project {
-	root := sessionRoot()
-	dirs, err := os.ReadDir(root)
-	if err != nil {
-		return nil
+func expandUserPath(p string) string {
+	home, _ := os.UserHomeDir()
+	if p == "~" {
+		return home
 	}
-	latest := map[string]time.Time{}
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:])
+	}
+	return p
+}
+
+// projectRoots returns directories scanned for projects: $MIRO_PROJECTS
+// (colon-separated roots) plus common default roots that exist.
+func projectRoots() []string {
+	var roots []string
+	if r := os.Getenv("MIRO_PROJECTS"); r != "" {
+		for _, p := range filepath.SplitList(r) {
+			p = expandUserPath(p)
+			if p != "" {
+				roots = append(roots, p)
+			}
 		}
-		files, err := os.ReadDir(filepath.Join(root, d.Name()))
-		if err != nil {
-			continue
+	}
+	home, _ := os.UserHomeDir()
+	for _, sub := range []string{"projects", "code", "dev", "src", "work", "Documents", "Documents/code"} {
+		d := filepath.Join(home, sub)
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			roots = append(roots, d)
 		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+	}
+	return roots
+}
+
+// ListProjects returns git repositories from saved sessions' cwds plus a
+// one-level scan of the configured/common project roots, enriched with
+// branch / dirty / remote hints. Sessions-first, then discovered, each sorted
+// most-recently-used first.
+func ListProjects() []Project {
+	candidates := map[string]time.Time{} // dir -> last used (zero = discovered)
+	root := sessionRoot()
+	if dirs, err := os.ReadDir(root); err == nil {
+		for _, d := range dirs {
+			if !d.IsDir() {
 				continue
 			}
-			p := filepath.Join(root, d.Name(), f.Name())
-			cwd := sessionCwdOf(p)
-			if cwd == "" {
-				continue
-			}
-			st, err := os.Stat(p)
+			files, err := os.ReadDir(filepath.Join(root, d.Name()))
 			if err != nil {
 				continue
 			}
-			if t, ok := latest[cwd]; !ok || st.ModTime().After(t) {
-				latest[cwd] = st.ModTime()
+			for _, f := range files {
+				if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+					continue
+				}
+				p := filepath.Join(root, d.Name(), f.Name())
+				cwd := sessionCwdOf(p)
+				if cwd == "" {
+					continue
+				}
+				st, err := os.Stat(p)
+				if err != nil {
+					continue
+				}
+				if t, ok := candidates[cwd]; !ok || st.ModTime().After(t) {
+					candidates[cwd] = st.ModTime()
+				}
 			}
 		}
 	}
-	list := make([]Project, 0, len(latest))
-	for c, at := range latest {
+	for _, r := range projectRoots() {
+		entries, err := os.ReadDir(r)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			d := filepath.Join(r, e.Name())
+			if _, ok := candidates[d]; ok {
+				continue
+			}
+			if IsGitRepo(d) {
+				candidates[d] = time.Time{}
+			}
+		}
+	}
+	list := make([]Project, 0, len(candidates))
+	for c, at := range candidates {
 		if !IsGitRepo(c) {
 			continue
 		}
 		branch, dirty, remote := ProjectGitInfo(c)
 		list = append(list, Project{Dir: c, Branch: branch, Dirty: dirty, Remote: remote, LastUsed: at})
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].LastUsed.After(list[j].LastUsed) })
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].LastUsed.IsZero() != list[j].LastUsed.IsZero() {
+			return !list[i].LastUsed.IsZero() // used projects first
+		}
+		return list[i].LastUsed.After(list[j].LastUsed)
+	})
 	return list
 }
 
