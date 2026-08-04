@@ -87,6 +87,11 @@ type Model struct {
 // window exit the TUI.
 const ctrlCQuitWindow = 1200 * time.Millisecond
 
+// fullBannerMinHeight leaves room for the header, six-row logo, greeting,
+// input, and footer. Below this height, rendering the full logo would make
+// the terminal clip its bottom rows and look like a broken banner.
+const fullBannerMinHeight = 12
+
 // sessionPickerState renders the historical-session chooser.
 type sessionPickerState struct {
 	active   bool
@@ -225,158 +230,158 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.picker.active = false
 				m.picker = nil
 				return m, nil
-		case "ctrl+c":
-			m.picker.active = false
-			m.picker = nil
-			m.ctrlCAt = time.Now() // count as the first press of a double-tap
-			return m, nil
-		default:
-			return m, nil // swallow other keys while picking
+			case "ctrl+c":
+				m.picker.active = false
+				m.picker = nil
+				m.ctrlCAt = time.Now() // count as the first press of a double-tap
+				return m, nil
+			default:
+				return m, nil // swallow other keys while picking
+			}
 		}
-	}
-	// task board overlay keys take priority next
-	if m.board != nil && m.board.active {
-		switch msg.String() {
-		case "up":
-			idx := m.board.selected
-			for {
-				idx--
-				if idx < 0 {
-					idx = len(m.board.rows) - 1
+		// task board overlay keys take priority next
+		if m.board != nil && m.board.active {
+			switch msg.String() {
+			case "up":
+				idx := m.board.selected
+				for {
+					idx--
+					if idx < 0 {
+						idx = len(m.board.rows) - 1
+					}
+					if !m.board.rows[idx].header {
+						break
+					}
 				}
-				if !m.board.rows[idx].header {
-					break
+				m.board.selected = idx
+				return m, nil
+			case "down":
+				idx := m.board.selected
+				for {
+					idx++
+					if idx >= len(m.board.rows) {
+						idx = 0
+					}
+					if !m.board.rows[idx].header {
+						break
+					}
 				}
+				m.board.selected = idx
+				return m, nil
+			case "enter":
+				ri := m.board.rows[m.board.selected]
+				if ri.header || ri.idx < 0 || ri.idx >= len(m.board.tasks) {
+					return m, nil
+				}
+				task := m.board.tasks[ri.idx]
+				text := "继续任务 " + task.ID
+				m.board.active = false
+				m.board = nil
+				m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
+				m.textarea.SetValue("")
+				m.busy = true
+				if err := m.client.SendUserMessage(text); err != nil {
+					m.err = err
+					m.busy = false
+				}
+				return m, nil
+			case "esc", "ctrl+c":
+				m.board.active = false
+				m.board = nil
+				m.ctrlCAt = time.Now()
+				return m, nil
+			default:
+				return m, nil // swallow other keys while the board is open
 			}
-			m.board.selected = idx
-			return m, nil
-		case "down":
-			idx := m.board.selected
-			for {
-				idx++
-				if idx >= len(m.board.rows) {
-					idx = 0
+		}
+		// project picker overlay keys take priority next
+		if m.ppicker != nil && m.ppicker.active {
+			switch msg.String() {
+			case "up", "k":
+				if len(m.ppicker.items) > 0 {
+					m.ppicker.selected--
+					if m.ppicker.selected < 0 {
+						m.ppicker.selected = len(m.ppicker.items) - 1
+					}
 				}
-				if !m.board.rows[idx].header {
-					break
+				return m, nil
+			case "down", "j":
+				if len(m.ppicker.items) > 0 {
+					m.ppicker.selected++
+					if m.ppicker.selected >= len(m.ppicker.items) {
+						m.ppicker.selected = 0
+					}
 				}
-			}
-			m.board.selected = idx
-			return m, nil
-		case "enter":
-			ri := m.board.rows[m.board.selected]
-			if ri.header || ri.idx < 0 || ri.idx >= len(m.board.tasks) {
+				return m, nil
+			case "enter":
+				if len(m.ppicker.items) > 0 && m.ppicker.selected >= 0 {
+					m.relaunchDir = m.ppicker.items[m.ppicker.selected].Dir
+				} else if f := strings.TrimSpace(string(m.ppicker.filter)); f != "" {
+					m.relaunchDir = expandUserPath(f) // no match: typed text as a path
+				}
+				m.ppicker.active = false
+				m.ppicker = nil
+				if m.relaunchDir != "" {
+					return m, tea.Quit
+				}
+				return m, nil
+			case "esc", "ctrl+c":
+				m.ppicker.active = false
+				m.ppicker = nil
+				m.ctrlCAt = time.Now()
+				return m, nil
+			default:
+				if len(msg.Runes) > 0 {
+					m.ppicker.filter = append(m.ppicker.filter, msg.Runes...)
+					m.ppRecalc()
+				} else if msg.String() == "backspace" && len(m.ppicker.filter) > 0 {
+					m.ppicker.filter = m.ppicker.filter[:len(m.ppicker.filter)-1]
+					m.ppRecalc()
+				}
 				return m, nil
 			}
-			task := m.board.tasks[ri.idx]
-			text := "继续任务 " + task.ID
-			m.board.active = false
-			m.board = nil
-			m.lines = append(m.lines, chatLine{kind: kindUser, text: text})
-			m.textarea.SetValue("")
-			m.busy = true
-			if err := m.client.SendUserMessage(text); err != nil {
-				m.err = err
-				m.busy = false
-			}
-			return m, nil
-		case "esc", "ctrl+c":
-			m.board.active = false
-			m.board = nil
-			m.ctrlCAt = time.Now()
-			return m, nil
-		default:
-			return m, nil // swallow other keys while the board is open
 		}
-	}
-	// project picker overlay keys take priority next
-	if m.ppicker != nil && m.ppicker.active {
-		switch msg.String() {
-		case "up", "k":
-			if len(m.ppicker.items) > 0 {
-				m.ppicker.selected--
-				if m.ppicker.selected < 0 {
-					m.ppicker.selected = len(m.ppicker.items) - 1
+		// inline path autocomplete for "/project <path>" — selection keys take
+		// priority; other keys fall through to the textarea so the menu can be
+		// recomputed from the updated input below
+		if m.pmenu != nil && m.pmenu.active {
+			switch msg.String() {
+			case "up", "k":
+				if len(m.pmenu.matches) > 0 {
+					m.pmenu.selected--
+					if m.pmenu.selected < 0 {
+						m.pmenu.selected = len(m.pmenu.matches) - 1
+					}
 				}
-			}
-			return m, nil
-		case "down", "j":
-			if len(m.ppicker.items) > 0 {
-				m.ppicker.selected++
-				if m.ppicker.selected >= len(m.ppicker.items) {
-					m.ppicker.selected = 0
+				return m, nil
+			case "down", "j":
+				if len(m.pmenu.matches) > 0 {
+					m.pmenu.selected++
+					if m.pmenu.selected >= len(m.pmenu.matches) {
+						m.pmenu.selected = 0
+					}
 				}
+				return m, nil
+			case "tab":
+				if len(m.pmenu.matches) > 0 {
+					m.pmenu.complete(&m.textarea)
+				}
+				m.pmenu.active = false
+				return m, nil
+			case "esc":
+				m.pmenu.active = false
+				return m, nil
+			case "enter":
+				m.pmenu.active = false
+				if len(m.pmenu.matches) > 0 && m.pmenu.selected >= 0 {
+					m.relaunchDir = m.pmenu.matches[m.pmenu.selected].Path
+					m.textarea.SetValue("")
+					return m, tea.Quit
+				}
+				// no match: fall through to the normal /project handling below
 			}
-			return m, nil
-		case "enter":
-			if len(m.ppicker.items) > 0 && m.ppicker.selected >= 0 {
-				m.relaunchDir = m.ppicker.items[m.ppicker.selected].Dir
-			} else if f := strings.TrimSpace(string(m.ppicker.filter)); f != "" {
-				m.relaunchDir = expandUserPath(f) // no match: typed text as a path
-			}
-			m.ppicker.active = false
-			m.ppicker = nil
-			if m.relaunchDir != "" {
-				return m, tea.Quit
-			}
-			return m, nil
-		case "esc", "ctrl+c":
-			m.ppicker.active = false
-			m.ppicker = nil
-			m.ctrlCAt = time.Now()
-			return m, nil
-		default:
-			if len(msg.Runes) > 0 {
-				m.ppicker.filter = append(m.ppicker.filter, msg.Runes...)
-				m.ppRecalc()
-			} else if msg.String() == "backspace" && len(m.ppicker.filter) > 0 {
-				m.ppicker.filter = m.ppicker.filter[:len(m.ppicker.filter)-1]
-				m.ppRecalc()
-			}
-			return m, nil
 		}
-	}
-	// inline path autocomplete for "/project <path>" — selection keys take
-	// priority; other keys fall through to the textarea so the menu can be
-	// recomputed from the updated input below
-	if m.pmenu != nil && m.pmenu.active {
-		switch msg.String() {
-		case "up", "k":
-			if len(m.pmenu.matches) > 0 {
-				m.pmenu.selected--
-				if m.pmenu.selected < 0 {
-					m.pmenu.selected = len(m.pmenu.matches) - 1
-				}
-			}
-			return m, nil
-		case "down", "j":
-			if len(m.pmenu.matches) > 0 {
-				m.pmenu.selected++
-				if m.pmenu.selected >= len(m.pmenu.matches) {
-					m.pmenu.selected = 0
-				}
-			}
-			return m, nil
-		case "tab":
-			if len(m.pmenu.matches) > 0 {
-				m.pmenu.complete(&m.textarea)
-			}
-			m.pmenu.active = false
-			return m, nil
-		case "esc":
-			m.pmenu.active = false
-			return m, nil
-		case "enter":
-			m.pmenu.active = false
-			if len(m.pmenu.matches) > 0 && m.pmenu.selected >= 0 {
-				m.relaunchDir = m.pmenu.matches[m.pmenu.selected].Path
-				m.textarea.SetValue("")
-				return m, tea.Quit
-			}
-			// no match: fall through to the normal /project handling below
-		}
-	}
-	// slash-command menu keys take priority while the menu is open
+		// slash-command menu keys take priority while the menu is open
 		if m.menu.active && len(m.menu.matches) > 0 {
 			switch msg.String() {
 			case "up":
@@ -669,7 +674,11 @@ func (m *Model) refreshViewport() {
 		case kindInfo:
 			b.WriteString(styleHeaderText.Render(l.text))
 		case kindBanner:
-			b.WriteString(m.bannerView() + "\n")
+			if m.height > 0 && m.height < fullBannerMinHeight {
+				b.WriteString("✦ Miro\n")
+			} else {
+				b.WriteString(m.bannerView() + "\n")
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -896,7 +905,7 @@ func (m Model) View() string {
 		pathMenu = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(strings.Join(lines, "\n")) + "\n"
 	}
@@ -935,7 +944,7 @@ func (m Model) View() string {
 		board = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorAccent).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(strings.Join(bl, "\n")) + "\n"
 	}
@@ -960,7 +969,7 @@ func (m Model) View() string {
 		ppicker = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorAccent).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(strings.Join(pl, "\n")) + "\n"
 	}

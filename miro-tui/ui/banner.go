@@ -7,54 +7,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// miroGlyphs are the four letters of the startup logo, each 6 rows tall.
-// They are joined with single spaces so all rows share the same width.
-var miroGlyphs = []string{
-	`███╗   ███╗
-████╗ ████║
-██╔████╔██║
-██║╚██╔╝██║
-██║ ╚═╝ ██║
-╚═╝     ╚═╝`,
-	`██╗
-██║
-██║
-██║
-██║
-╚═╝`,
-	`██████╗ 
-██╔══██╗
-██████╔╝
-██╔══██╗
-██║  ██║
-╚═╝  ╚═╝`,
-	` ██████╗ 
-██╔═══██╗
-██║   ██║
-██║   ██║
-╚██████╔╝
- ╚═════╝ `,
-}
-
-// miroBanner is the ASCII-art logo shown at the top of the conversation
-// (opencode-style startup banner).
-var miroBanner = buildMiroBanner()
-
-func buildMiroBanner() string {
-	rows := make([]string, 6)
-	for _, g := range miroGlyphs {
-		for i, line := range strings.Split(g, "\n") {
-			if i >= 6 {
-				continue
-			}
-			rows[i] += " " + line
-		}
-	}
-	for i := range rows {
-		rows[i] = strings.TrimLeft(rows[i], " ")
-	}
-	return strings.Join(rows, "\n")
-}
+// miroBanner is rendered as one complete six-row logo. Keeping the rows in a
+// single literal avoids losing trailing rows while composing per-letter
+// glyphs during terminal startup.
+var miroBanner = `███╗   ███╗ ██╗ ██████╗   ██████╗
+████╗ ████║ ██║ ██╔══██╗ ██╔═══██╗
+██╔████╔██║ ██║ ██████╔╝ ██║   ██║
+██║╚██╔╝██║ ██║ ██╔══██╗ ██║   ██║
+██║ ╚═╝ ██║ ██║ ██║  ██║ ╚██████╔╝
+╚═╝     ╚═╝ ╚═╝ ╚═╝  ╚═╝  ╚═════╝`
 
 // bannerStops is the left→right color ramp for the logo (Miro palette).
 var bannerStops = [][3]int{
