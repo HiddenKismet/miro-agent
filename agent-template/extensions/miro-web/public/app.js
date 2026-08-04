@@ -367,7 +367,10 @@ function apiHeaders(extra = {}) {
 }
 
 function send(cmd) {
-  cmd.id = `w${++cmdSeq}`;
+  // Preserve an existing id: extension_ui_response carries the engine's dialog
+  // request UUID, which must reach the engine unchanged to resolve the pending
+  // dialog. Only assign our own sequence id to fresh commands.
+  if (!cmd.id) cmd.id = `w${++cmdSeq}`;
   return fetch("/api/command", {
     method: "POST",
     headers: apiHeaders({ "Content-Type": "application/json" }),
