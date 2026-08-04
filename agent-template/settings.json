@@ -4,5 +4,5 @@
     "npm:@mjasnikovs/pi-task",
     "npm:pi-goal-list-loop-audit"
   ],
-  "theme": "miro-dark"
+  "theme": "miro-opencode"
 }

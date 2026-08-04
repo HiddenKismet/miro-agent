@@ -1,13 +1,12 @@
 /**
- * Miro brand hook — gives Miro Personal Agent its identity.
+ * Miro brand hook — gives Miro Personal Agent its identity and an
+ * OpenCode-inspired TUI:
  *
- * TUI customization (per docs/tui.md):
  *   1. Mint pulsing ✦ working indicator while streaming
- *   2. Persistent "✦ Miro" status in the footer area
- *   3. Custom footer: usage stats + model + git branch + Miro signature
- *
- * Also announces Miro at session start and, when MIRO_AUTOWEB=1,
- * auto-launches Miro Web (detached, survives this process).
+ *   2. Persistent "✦ Miro" status
+ *   3. OpenCode-style two-line footer: status bar + key hints
+ *   4. Info widget above the editor (tokens / cost / model)
+ *   5. Session greeting + optional MIRO_AUTOWEB auto-launch
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -19,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WEB_SERVER = join(here, "miro-web", "server.mjs");
+const MIRO_VERSION = "0.1.0";
 
 export default function (pi: ExtensionAPI) {
   let fired = false;
@@ -27,28 +27,54 @@ export default function (pi: ExtensionAPI) {
     if (fired) return;
     fired = true;
 
-    // ---- brand greeting -----------------------------------------------------
+    // ---- brand greeting -------------------------------------------------------
     ctx.ui.notify("Miro ✦ Let Miro sort your mind", "info");
-
-    // ---- terminal window title ------------------------------------------------
     ctx.ui.setTitle("Miro ✦ Personal Agent");
 
-    // ---- mint pulse working indicator ---------------------------------------
-    // Frames are rendered verbatim, so colors come from the current theme.
+    // ---- mint pulse working indicator ------------------------------------------
     ctx.ui.setWorkingIndicator({
       frames: [
-        ctx.ui.theme.fg("dim", "✦"),
-        ctx.ui.theme.fg("muted", "✦"),
-        ctx.ui.theme.fg("accent", "✦"),
-        ctx.ui.theme.fg("muted", "✦"),
+        ctx.ui.theme.fg("dim", "■"),
+        ctx.ui.theme.fg("muted", "■■"),
+        ctx.ui.theme.fg("accent", "■■■"),
+        ctx.ui.theme.fg("muted", "■■"),
       ],
       intervalMs: 140,
     });
 
-    // ---- persistent status ---------------------------------------------------
+    // ---- persistent status -------------------------------------------------------
     ctx.ui.setStatus("miro", ctx.ui.theme.fg("accent", "✦ Miro"));
 
-    // ---- custom footer: stats · model · branch · signature --------------------
+    // ---- info widget above the editor (OpenCode sidebar vibe) ---------------------
+    const renderInfo = () => {
+      let input = 0,
+        output = 0,
+        cost = 0;
+      for (const e of ctx.sessionManager.getBranch()) {
+        if (e.type === "message" && e.message.role === "assistant") {
+          const m = e.message as AssistantMessage;
+          input += m.usage.input;
+          output += m.usage.output;
+          cost += m.usage.cost.total;
+        }
+      }
+      const fmt = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
+      const theme = ctx.ui.theme;
+      const model = ctx.model?.id ? ctx.model.id.split("/").pop() : "—";
+      return [
+        theme.fg("accent", "✦") +
+          theme.fg("muted", " Miro") +
+          theme.fg("dim", "  ·  ") +
+          theme.fg("dim", `↑${fmt(input)} ↓${fmt(output)}`) +
+          theme.fg("dim", "  ·  ") +
+          theme.fg("warning", `$${cost.toFixed(3)}`) +
+          theme.fg("dim", "  ·  ") +
+          theme.fg("muted", model ?? ""),
+      ];
+    };
+    ctx.ui.setWidget("miro-info", renderInfo(), { placement: "aboveEditor" });
+
+    // ---- OpenCode-style two-line footer --------------------------------------------
     ctx.ui.setFooter((tui, theme, footerData) => {
       const unsub = footerData.onBranchChange(() => tui.requestRender());
 
@@ -56,34 +82,36 @@ export default function (pi: ExtensionAPI) {
         dispose: unsub,
         invalidate() {},
         render(width: number): string[] {
-          // usage stats from the current session branch
-          let input = 0,
-            output = 0,
-            cost = 0;
-          for (const e of ctx.sessionManager.getBranch()) {
-            if (e.type === "message" && e.message.role === "assistant") {
-              const m = e.message as AssistantMessage;
-              input += m.usage.input;
-              output += m.usage.output;
-              cost += m.usage.cost.total;
-            }
+          // line 1: path : branch  ···  • Miro version
+          let cwd = "";
+          try {
+            cwd = ctx.sessionManager.getCwd();
+          } catch {
+            /* noop */
           }
-          const fmt = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
-
-          const left = theme.fg("dim", `↑${fmt(input)} ↓${fmt(output)} $${cost.toFixed(3)}`);
-
+          const home = process.env.HOME || "";
+          const shownCwd = home && cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
           const branch = footerData.getGitBranch();
-          const branchStr = branch ? ` ${theme.fg("dim", "(")}${theme.fg("muted", branch)}${theme.fg("dim", ")")}` : "";
-          const modelStr = ctx.model?.id ? ` ${theme.fg("dim", ctx.model.id)}` : "";
-          const right = `${theme.fg("accent", "✦")} ${theme.fg("muted", "Miro")}${modelStr}${branchStr}`;
+          const left =
+            theme.fg("muted", shownCwd) +
+            (branch ? theme.fg("dim", ":") + theme.fg("accent", branch) : "");
+          const right = theme.fg("dim", `• Miro ${MIRO_VERSION}`);
+          const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
+          const line1 = truncateToWidth(left + pad1 + right, width);
 
-          const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
-          return [truncateToWidth(left + pad + right, width)];
+          // line 2: key hints
+          const hints = theme.fg(
+            "dim",
+            "⌃C exit    /web browser    /task workflow    /goal objectives    /list backlog    /loop optimize",
+          );
+          const line2 = truncateToWidth(hints, width);
+
+          return [line1, line2];
         },
       };
     });
 
-    // ---- optional: auto-start the browser UI ----------------------------------
+    // ---- optional: auto-start the browser UI ----------------------------------------
     if (process.env.MIRO_AUTOWEB === "1") {
       const port = String(Number(process.env.MIRO_PORT) || 5175);
       try {

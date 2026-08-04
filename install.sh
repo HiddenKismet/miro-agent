@@ -62,7 +62,7 @@ let settings = {};
 try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 settings.packages = [...new Set([...(settings.packages || []), ...wanted])];
 // Miro default theme when the user has not chosen one
-if (!settings.theme) settings.theme = "miro-dark";
+if (!settings.theme) settings.theme = "miro-opencode";
 fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
 EOF
 echo "  ✓ settings.json packages: subagents, pi-task, glla (goal)"
