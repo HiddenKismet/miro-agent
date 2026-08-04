@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +53,12 @@ type Model struct {
 	// task board overlay for /kanban
 	board *taskBoardState
 
+	// project picker overlay for /project
+	ppicker *projectPickerState
+
+	// when set, the TUI quits and main relaunches with --project <dir>
+	relaunchDir string
+
 	// tool status badges: toolCallId → "running" | "ok" | "error"
 	toolStatus map[string]string
 
@@ -77,6 +85,51 @@ type sessionPickerState struct {
 	sessions []Session
 	selected int
 }
+
+// projectPickerState is the /project chooser overlay (fuzzy-filtered list of
+// git repositories with context hints). Selecting one relaunches the TUI into
+// that directory.
+type projectPickerState struct {
+	active   bool
+	all      []Project
+	items    []Project
+	filter   []rune
+	selected int
+}
+
+func (m *Model) ppRecalc() {
+	if m.ppicker == nil {
+		return
+	}
+	q := string(m.ppicker.filter)
+	m.ppicker.items = m.ppicker.all
+	if strings.TrimSpace(q) != "" {
+		type hit struct {
+			p     Project
+			score int
+		}
+		var hits []hit
+		for _, p := range m.ppicker.all {
+			if ok, s := FuzzyMatch(q, p.Dir); ok {
+				hits = append(hits, hit{p, s})
+			}
+		}
+		sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+		m.ppicker.items = make([]Project, 0, len(hits))
+		for _, h := range hits {
+			m.ppicker.items = append(m.ppicker.items, h.p)
+		}
+	}
+	if m.ppicker.selected >= len(m.ppicker.items) {
+		m.ppicker.selected = len(m.ppicker.items) - 1
+	}
+	if m.ppicker.selected < 0 && len(m.ppicker.items) > 0 {
+		m.ppicker.selected = 0
+	}
+}
+
+// RelaunchDir returns the directory to relaunch into, or "" for a normal exit.
+func (m Model) RelaunchDir() string { return m.relaunchDir }
 
 // switchResultMsg reports the outcome of a session switch / new session.
 type switchResultMsg struct {
@@ -216,6 +269,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // swallow other keys while the board is open
 		}
 	}
+	// project picker overlay keys take priority next
+	if m.ppicker != nil && m.ppicker.active {
+		switch msg.String() {
+		case "up", "k":
+			if len(m.ppicker.items) > 0 {
+				m.ppicker.selected--
+				if m.ppicker.selected < 0 {
+					m.ppicker.selected = len(m.ppicker.items) - 1
+				}
+			}
+			return m, nil
+		case "down", "j":
+			if len(m.ppicker.items) > 0 {
+				m.ppicker.selected++
+				if m.ppicker.selected >= len(m.ppicker.items) {
+					m.ppicker.selected = 0
+				}
+			}
+			return m, nil
+		case "enter":
+			if len(m.ppicker.items) > 0 && m.ppicker.selected >= 0 {
+				m.relaunchDir = m.ppicker.items[m.ppicker.selected].Dir
+			} else if f := strings.TrimSpace(string(m.ppicker.filter)); f != "" {
+				m.relaunchDir = expandUserPath(f) // no match: typed text as a path
+			}
+			m.ppicker.active = false
+			m.ppicker = nil
+			if m.relaunchDir != "" {
+				return m, tea.Quit
+			}
+			return m, nil
+		case "esc", "ctrl+c":
+			m.ppicker.active = false
+			m.ppicker = nil
+			m.ctrlCAt = time.Now()
+			return m, nil
+		default:
+			if len(msg.Runes) > 0 {
+				m.ppicker.filter = append(m.ppicker.filter, msg.Runes...)
+				m.ppRecalc()
+			} else if msg.String() == "backspace" && len(m.ppicker.filter) > 0 {
+				m.ppicker.filter = m.ppicker.filter[:len(m.ppicker.filter)-1]
+				m.ppRecalc()
+			}
+			return m, nil
+		}
+	}
 	// slash-command menu keys take priority while the menu is open
 		if m.menu.active && len(m.menu.matches) > 0 {
 			switch msg.String() {
@@ -307,6 +407,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.board = openTaskBoard(tasks)
+				return m, nil
+			}
+
+			// /project → enter a specific directory (relaunch TUI into it)
+			if text == "/project" || strings.HasPrefix(text, "/project ") {
+				rest := strings.TrimSpace(strings.TrimPrefix(text, "/project"))
+				m.textarea.SetValue("")
+				m.menu.reset()
+				if rest != "" {
+					m.relaunchDir = expandUserPath(rest)
+					return m, tea.Quit
+				}
+				projects := ListProjects()
+				if len(projects) == 0 {
+					m.lines = append(m.lines, chatLine{kind: kindInfo, text: "⚠ 没有找到项目（可输入 /project <路径> 直接进入）"})
+					return m, nil
+				}
+				m.ppicker = &projectPickerState{active: true, all: projects}
+				m.ppRecalc()
 				return m, nil
 			}
 
@@ -724,6 +843,31 @@ func (m Model) View() string {
 			Render(strings.Join(bl, "\n")) + "\n"
 	}
 
+	// project picker overlay (/project)
+	ppicker := ""
+	if m.ppicker != nil && m.ppicker.active {
+		pl := []string{"  > " + string(m.ppicker.filter) + "▏"}
+		if len(m.ppicker.items) == 0 {
+			pl = append(pl, lipgloss.NewStyle().Foreground(colorDim).Render("    （无匹配 · Enter 将输入作为路径）"))
+		}
+		for i, p := range m.ppicker.items {
+			prefix := "   "
+			style := lipgloss.NewStyle().Foreground(colorMuted)
+			if i == m.ppicker.selected {
+				prefix = " ❯ "
+				style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+			pl = append(pl, style.Render(prefix+filepath.Base(p.Dir))+" "+lipgloss.NewStyle().Foreground(colorDim).Render(ProjectHint(p)))
+		}
+		pl = append(pl, "", lipgloss.NewStyle().Foreground(colorDim).Render("输入过滤（路径片段）· ↑↓ 选择 · Enter 进入 · Esc 取消"))
+		ppicker = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(strings.Join(pl, "\n")) + "\n"
+	}
+
 	// input + footer
 	input := styleInputBox.Width(m.width - 4).Render(m.textarea.View())
 	gitPart := ""
@@ -738,6 +882,7 @@ func (m Model) View() string {
 		picker,
 		menu,
 		board,
+		ppicker,
 		input,
 		footer,
 	)

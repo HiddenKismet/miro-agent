@@ -1,4 +1,4 @@
-package main
+package ui
 
 import "testing"
 
@@ -19,17 +19,9 @@ func TestFuzzyMatch(t *testing.T) {
 		{"hku/zzz", "/home/hkun/miro-agent", false},
 	}
 	for _, c := range cases {
-		got, _ := fuzzyMatch(c.q, c.target)
+		got, _ := FuzzyMatch(c.q, c.target)
 		if got != c.want {
-			t.Errorf("fuzzyMatch(%q, %q) = %v, want %v", c.q, c.target, got, c.want)
+			t.Errorf("FuzzyMatch(%q, %q) = %v, want %v", c.q, c.target, got, c.want)
 		}
 	}
-}
-
-func TestFuzzyScoreOrder(t *testing.T) {
-	// Exact basename match should outrank a weaker path fragment.
-	a, _ := fuzzyMatch("agent", "/home/hkun/miro-agent")
-	b, _ := fuzzyMatch("agent", "/home/hkun/some-other")
-	_ = a
-	_ = b
 }

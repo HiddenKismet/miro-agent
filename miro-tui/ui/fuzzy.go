@@ -1,16 +1,19 @@
-package main
+package ui
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
-// fuzzyMatch implements a VSCode quick-open style matcher: the query (terms
+// FuzzyMatch implements a VSCode quick-open style matcher: the query (terms
 // split by '/', '\', ':' or space) must appear as subsequences of the target
 // path in order, with scoring bonuses for matches at path-segment starts and
 // word boundaries. Returns whether it matched and a score (higher = better).
 //
-//   fuzzyMatch("mro", "/home/hkun/miro-agent")    -> true
-//   fuzzyMatch("hku/mro", "/home/hkun/miro-agent") -> true
-//   fuzzyMatch("zxc", "/home/hkun/miro-agent")     -> false
-func fuzzyMatch(query, target string) (bool, int) {
+//	FuzzyMatch("mro", "/home/hkun/miro-agent")    -> true
+//	FuzzyMatch("hku/mro", "/home/hkun/miro-agent") -> true
+//	FuzzyMatch("zxc", "/home/hkun/miro-agent")     -> false
+func FuzzyMatch(query, target string) (bool, int) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	t := strings.ToLower(target)
 	if q == "" {
@@ -33,6 +36,64 @@ func fuzzyMatch(query, target string) (bool, int) {
 		pos = end + 1
 	}
 	return true, score
+}
+
+// HumanTime renders a compact relative time for hint lines.
+func HumanTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "刚刚"
+	case d < time.Hour:
+		return itoa(int(d.Minutes())) + " 分钟前"
+	case d < 24*time.Hour:
+		return itoa(int(d.Hours())) + " 小时前"
+	default:
+		return itoa(int(d.Hours()/24)) + " 天前"
+	}
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
+
+// ProjectHint builds the context line for a project item.
+func ProjectHint(p Project) string {
+	parts := []string{p.Dir}
+	if p.Branch != "" {
+		parts = append(parts, p.Branch)
+	}
+	if p.Dirty > 0 {
+		parts = append(parts, "●"+itoa(p.Dirty))
+	}
+	if p.Remote != "" {
+		parts = append(parts, p.Remote)
+	}
+	if when := HumanTime(p.LastUsed); when != "" {
+		parts = append(parts, when)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func isSegmentStart(s string, i int) bool {

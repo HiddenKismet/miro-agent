@@ -82,18 +82,19 @@ miro
 | `MIRO_PORT` | `5175` | Miro Web 端口 |
 | `MIRO_AUTOWEB` | — | 设为 `1` 时启动即自动打开 Miro Web |
 | `MIRO_WEB_TOKEN` | 自动生成 | Miro Web 访问令牌 |
-| `MIRO_PROJECT` | — | TUI 启动时直接进入的项目目录（跳过启动选择器） |
+| `MIRO_PROJECT` | `~/.miro/scratch` | TUI 启动时直接进入的项目目录（默认临时会话，跳过选择器） |
 | `MIRO_PROJECTS` | — | 冒号分隔的项目扫描根目录（TUI 选择器自动发现项目） |
 
-## 启动即选择工作目录
+## 工作目录：默认临时会话，/project 进入项目
 
-启动 Miro 时可选择会话落在哪里（类似 Codex 桌面端）：
+启动 Miro 默认进入**临时会话**（记录存到 `~/.miro/scratch`，与项目无关）。
+需要进入具体项目时：
 
-- **临时会话**：记录存到 `~/.miro/scratch`，与项目无关
-- **进入项目**：会话与 git 操作都落在所选项目目录（列出最近项目 + 手动输入路径）
-
-TUI 用 `↑↓/Enter` 选择；也可用 `miro --project <路径>` 或 `MIRO_PROJECT=<路径>` 跳过选择器。
-Web 欢迎屏提供「临时会话 / 进入项目」两个入口，切换会重启引擎并换到目标目录。
+- **TUI**：输入 `/project` 打开项目选择器（模糊过滤 + 路径提示，↑↓/Enter 选择），
+  或 `/project <路径>` 直接进入；进入后自动重启并落在该项目目录
+- **Web**：欢迎屏「进入项目」或 `/project` 命令，选择项目（或输入路径）后重启引擎切换目录
+- 启动时直进项目：`miro --project <路径>` 或 `MIRO_PROJECT=<路径>`
+- `MIRO_PROJECTS`：冒号分隔的项目扫描根目录（选择器自动发现项目）
 
 ## 致谢
 

@@ -64,8 +64,13 @@ func main() {
 		p.Send(ui.ExitMsg{})
 	}()
 
-	if _, err := p.Run(); err != nil {
+	final, err := p.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "miro: %v\n", err)
 		os.Exit(1)
+	}
+	if fm, ok := final.(ui.Model); ok && fm.RelaunchDir() != "" {
+		client.Close()
+		relaunchIn(fm.RelaunchDir())
 	}
 }
