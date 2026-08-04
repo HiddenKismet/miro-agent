@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Miro Personal Agent — Let Miro sort your mind. Built on Pi Agent core." />
+  <meta name="description" content="Miro Personal Agent — Let Miro sort your mind." />
   <title>Miro</title>
   <link rel="stylesheet" href="/vendor/hljs-theme.css" id="hljs-theme" />
   <link rel="stylesheet" href="/style.css?v=3" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E" />
   <script>
-    // Theme: light / dark / system — mirrors pi.dev's data-theme approach
+    // Theme: light / dark / system — Miro's own data-theme approach
     (() => {
       const root = document.documentElement;
-      const stored = localStorage.getItem("pi-web-theme");
+      const stored = localStorage.getItem("miro-web-theme");
       const mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
       const apply = () => {
         const theme = mode === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : mode;
@@ -33,7 +33,7 @@
       <div class="sidebar-header">
         <div class="brand">
           <span class="brand-mark">✦</span>
-          <span class="brand-name">PI&nbsp;Web</span>
+          <span class="brand-name">Miro</span>
         </div>
         <button id="btn-new-session" class="btn btn-primary btn-block" data-i18n="newChat">＋ 新对话</button>
       </div>
@@ -47,7 +47,7 @@
         <div class="status-card">
           <span id="conn-status" class="conn-dot conn-off" title="disconnected"></span>
           <span id="conn-text" data-i18n="connecting">连接中…</span>
-          <span class="footer-ver">pi-web</span>
+          <span class="footer-ver">miro-web</span>
         </div>
         <button id="btn-lang" class="linklike" title="切换语言 / Language">中 / EN</button>
       </div>
@@ -114,7 +114,7 @@
           <textarea
             id="input"
             rows="1"
-            placeholder="给 PI 发送消息…  输入 / 打开命令面板"
+            placeholder="给 Miro 发送消息…  输入 / 打开命令面板"
             data-i18n-placeholder="inputPlaceholder"
           ></textarea>
         </div>
@@ -154,7 +154,7 @@
 
         <section class="settings-section">
           <h3 data-i18n="credentials">凭据</h3>
-          <p class="settings-note" data-i18n="credentialsNote">等价于 pi 的 /login —— API key 保存到 ~/.pi/agent/auth.json。OAuth 登录请使用终端里的 /login。</p>
+          <p class="settings-note" data-i18n="credentialsNote">API key 保存到 ~/.miro/agent/auth.json。OAuth 登录请使用终端里的 /login。</p>
           <div class="cred-add">
             <input id="cred-provider" list="known-providers" placeholder="provider" autocomplete="off" />
             <datalist id="known-providers"></datalist>

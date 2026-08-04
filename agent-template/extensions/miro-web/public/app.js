@@ -2,8 +2,8 @@
  * Miro Web — frontend (Miro Personal Agent).
  *
  * Connects to the local server via:
- *   - EventSource (SSE)  /api/events   pi events -> UI
- *   - fetch (POST)       /api/command  UI actions -> pi (RPC JSONL)
+ *   - EventSource (SSE)  /api/events   engine events -> UI
+ *   - fetch (POST)       /api/command  UI actions -> engine (RPC JSONL)
  *   - fetch (GET)        /api/sessions saved session list
  *   - fetch (REST)       /api/auth     credential management (like /login)
  */
@@ -24,7 +24,7 @@ const I18N = {
     stop: "■ 停止",
     send: "发送",
     attach: "附加图片",
-    inputPlaceholder: "给 PI 发送消息…  输入 / 打开命令面板",
+    inputPlaceholder: "给 Miro 发送消息…  输入 / 打开命令面板",
     hint: "Enter 发送 · Shift+Enter 换行 · Esc 停止 · Ctrl+K 命令面板",
     renameSession: "点击重命名会话",
     thinking: "思考",
@@ -45,7 +45,7 @@ const I18N = {
     themeSystem: "跟随系统",
     language: "语言",
     credentials: "凭据",
-    credentialsNote: "等价于 pi 的 /login —— API key 保存到 ~/.pi/agent/auth.json。OAuth 登录请使用终端里的 /login。",
+    credentialsNote: "等价于 /login —— API key 保存到 ~/.miro/agent/auth.json。OAuth 登录请使用终端里的 /login。",
     provider: "provider",
     apiKey: "API key (sk-…)",
     save: "保存",
@@ -100,7 +100,7 @@ const I18N = {
     stop: "■ Stop",
     send: "Send",
     attach: "Attach image",
-    inputPlaceholder: "Message PI…  type / for commands",
+    inputPlaceholder: "Message Miro…  type / for commands",
     hint: "Enter to send · Shift+Enter newline · Esc to stop · Ctrl+K commands",
     renameSession: "Click to rename session",
     thinking: "Thinking",
@@ -121,7 +121,7 @@ const I18N = {
     themeSystem: "System",
     language: "Language",
     credentials: "Credentials",
-    credentialsNote: "Like /login — API keys are stored in ~/.pi/agent/auth.json. For OAuth, use /login in the terminal.",
+    credentialsNote: "Like /login — API keys are stored in ~/.miro/agent/auth.json. For OAuth, use /login in the terminal.",
     provider: "provider",
     apiKey: "API key (sk-…)",
     save: "Save",
@@ -167,7 +167,7 @@ const I18N = {
   },
 };
 
-let lang = localStorage.getItem("pi-web-lang") || (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
+let lang = localStorage.getItem("miro-web-lang") || (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 
 function t(key) {
   return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
@@ -249,7 +249,7 @@ const state = {
    ========================================================================== */
 
 function setTheme(mode) {
-  localStorage.setItem("pi-web-theme", mode);
+  localStorage.setItem("miro-web-theme", mode);
   document.documentElement.dataset.themeMode = mode;
   const theme = mode === "system"
     ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
@@ -561,7 +561,7 @@ function addView(view) {
   const continuation = view.role !== "user" && isContinuation();
   if (continuation && state.activeGroup) {
     // merge into the current turn group: only the blocks container is moved,
-    // so the avatar / "PI" header stays single at the top of the group
+    // so the avatar / "Miro" header stays single at the top of the group
     state.activeGroup.appendChild(view.bodyEl);
   } else if (view.role === "user") {
     state.activeGroup = null;
@@ -588,7 +588,7 @@ function buildMsgEl(view) {
     return wrap;
   }
   // assistant / system → turn-group container:
-  // one avatar + "PI" label at top, steps stacked vertically below
+  // one avatar + "Miro" label at top, steps stacked vertically below
   wrap.classList.add("agent-group");
   const label = el("div", "msg-role-label");
   label.textContent = t("assistantLabel");
@@ -970,10 +970,10 @@ function handleEvent(evt) {
     case "extension_ui_request":
       handleUiRequest(evt);
       break;
-    case "pi_exit":
+    case "engine_exit":
       showToast(t("connectionLost"), "error");
       break;
-    case "pi_restarted":
+    case "engine_restarted":
       showToast(t("restarted"), "info");
       break;
     case "server_error":
@@ -1469,7 +1469,7 @@ function addAttachment(file) {
 }
 
 /* ==========================================================================
-   Local commands (pi-feature parity: /login, /model, /tree, …)
+   Local commands (feature parity: /login, /model, /tree, …)
    ========================================================================== */
 
 const LOCAL_COMMANDS = [
@@ -1696,11 +1696,11 @@ async function renameSession(arg) {
 }
 
 /* ==========================================================================
-   Command menu — inline autocomplete like the pi TUI (type / to match)
+   Command menu — inline autocomplete like the Miro TUI (type / to match)
    ========================================================================== */
 
 function buildCmdItems(filter) {
-  const items = LOCAL_COMMANDS.map((c) => ({ name: c.name, desc: c.desc, kind: "pi", run: c.run }));
+  const items = LOCAL_COMMANDS.map((c) => ({ name: c.name, desc: c.desc, kind: "miro", run: c.run }));
   for (const c of state.commands ?? []) {
     if (LOCAL_COMMANDS.some((l) => l.name === c.name)) continue;
     items.push({
@@ -1900,7 +1900,7 @@ function init() {
   // language
   $("btn-lang").addEventListener("click", () => {
     lang = lang === "zh" ? "en" : "zh";
-    localStorage.setItem("pi-web-lang", lang);
+    localStorage.setItem("miro-web-lang", lang);
     applyI18n();
     syncLangSeg();
     refreshSessions();
@@ -1908,7 +1908,7 @@ function init() {
   document.querySelectorAll("#lang-seg button").forEach((b) => {
     b.addEventListener("click", () => {
       lang = b.dataset.lang;
-      localStorage.setItem("pi-web-lang", lang);
+      localStorage.setItem("miro-web-lang", lang);
       applyI18n();
       syncLangSeg();
       refreshSessions();
@@ -1935,11 +1935,11 @@ function init() {
     sessionListEl.classList.toggle("collapsed", collapsed);
     sessToggle.setAttribute("aria-expanded", String(!collapsed));
   };
-  applySessionCollapse(localStorage.getItem("pi-web-sessions-collapsed") === "1");
+  applySessionCollapse(localStorage.getItem("miro-web-sessions-collapsed") === "1");
   sessToggle.addEventListener("click", () => {
     const collapsed = !sessionListEl.classList.contains("collapsed");
     applySessionCollapse(collapsed);
-    localStorage.setItem("pi-web-sessions-collapsed", collapsed ? "1" : "0");
+    localStorage.setItem("miro-web-sessions-collapsed", collapsed ? "1" : "0");
   });
 
   // settings
@@ -2010,7 +2010,7 @@ function init() {
       if (!v.startsWith("/")) closeCmdMenu();
       return;
     }
-    // type "/" to start matching commands, like the pi TUI
+    // type "/" to start matching commands, like the Miro TUI
     if (v.startsWith("/") && !v.includes(" ")) {
       if (!state.cmdMenu) state.cmdMenu = { mode: "commands", filter: "", items: [], index: 0 };
       state.cmdMenu.filter = v.slice(1);

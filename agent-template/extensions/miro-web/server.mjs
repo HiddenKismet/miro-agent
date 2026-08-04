@@ -2,11 +2,11 @@
 /**
  * Miro Web — local server for the Miro Personal Agent browser UI.
  *
- * Spawns `pi --mode rpc` as the backend, then bridges the browser to the RPC
- * JSONL protocol:
+ * Spawns the Miro engine (`--mode rpc`) as the backend, then bridges the
+ * browser to the RPC JSONL protocol:
  *
- *   POST /api/command    client -> pi (correlated via `id`, response awaited)
- *   GET  /api/events     pi -> client (Server-Sent Events stream)
+ *   POST /api/command    client -> engine (correlated via `id`, response awaited)
+ *   GET  /api/events     engine -> client (Server-Sent Events stream)
  *   GET  /api/sessions   list saved sessions (read from the session dir)
  *   GET  /               the web UI (public/)
  *   GET  /vendor/*       vendored frontend libs (marked, highlight.js)
@@ -14,7 +14,7 @@
  * Pure Node.js — no npm dependencies at runtime beyond the vendored libs.
  *
  * Usage:
- *   node server.mjs [--port 5175] [--host 127.0.0.1] [--pi pi]
+ *   node server.mjs [--port 5175] [--host 127.0.0.1] [--pi <engine>]
  *                   [--provider <name>] [--model <pattern>] [--name <name>]
  *                   [--session-dir <path>] [--cwd <path>] [--open] [--no-session]
  */
@@ -22,7 +22,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat, writeFile, rename } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { join, dirname, resolve, basename, extname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -32,18 +32,28 @@ import crypto from "node:crypto";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
 const HOME = os.homedir();
-const AUTH_FILE = join(HOME, ".pi", "agent", "auth.json");
+const MIRO_HOME = process.env.MIRO_HOME || join(HOME, ".miro");
+const AGENT_DIR = process.env.MIRO_CODING_AGENT_DIR || join(MIRO_HOME, "agent");
+const AUTH_FILE = join(AGENT_DIR, "auth.json");
 // bump to invalidate browser caches for /app.js and /style.css
-const ASSET_VERSION = "3";
+const ASSET_VERSION = "4";
 
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
 
+// The Miro engine binary: prefer the launcher-provided MIRO_CORE_BIN, then the
+// white-labeled core inside MIRO_HOME, finally fall back to "pi" on PATH.
+function defaultEngineBinary() {
+  if (process.env.MIRO_CORE_BIN) return process.env.MIRO_CORE_BIN;
+  const core = join(MIRO_HOME, "core", "node_modules", ".bin", "pi");
+  return existsSync(core) ? core : "pi";
+}
+
 const args = {
   port: Number(process.env.MIRO_PORT) || 5175,
   host: "127.0.0.1",
-  pi: "pi",
+  pi: defaultEngineBinary(),
   provider: undefined,
   model: undefined,
   name: undefined,
@@ -77,11 +87,12 @@ Usage: node server.mjs [options]
 Options:
   --port <n>          Port to listen on (default $MIRO_PORT or 5175)
   --host <host>       Bind address (default 127.0.0.1; use 0.0.0.0 for LAN)
-  --pi <path>         Path to the pi binary (default: "pi" from PATH)
-  --provider <name>   Pass --provider to pi (e.g. anthropic, openai)
-  --model <pattern>   Pass --model to pi (e.g. anthropic/claude-*, or model:thinking)
+  --pi <path>         Path to the engine binary (default: $MIRO_CORE_BIN, then
+                      ~/.miro/core/node_modules/.bin/pi, then "pi" from PATH)
+  --provider <name>   Pass --provider to the engine (e.g. anthropic, openai)
+  --model <pattern>   Pass --model to the engine (e.g. anthropic/claude-*, or model:thinking)
   --name <name>       Session display name
-  --session-dir <p>   Session storage directory (default: ~/.pi/agent/sessions)
+  --session-dir <p>   Session storage directory (default: ~/.miro/agent/sessions)
   --cwd <path>        Working directory for the agent
   --open              Open the browser automatically
   --no-session        Ephemeral mode (do not persist sessions)
@@ -131,17 +142,17 @@ function startPi() {
   me.on("error", (err) => {
     if (pi !== me) return; // stale instance
     piAlive = false;
-    console.error(`[miro-web] failed to spawn pi: ${err.message}`);
-    broadcast({ type: "server_error", message: `Failed to start pi: ${err.message}` });
+    console.error(`[miro-web] failed to spawn engine: ${err.message}`);
+    broadcast({ type: "server_error", message: `Failed to start engine: ${err.message}` });
     failAllPending(err.message);
   });
 
   me.on("exit", (code, signal) => {
-    if (pi !== me) return; // stale instance — a newer pi has replaced us
+    if (pi !== me) return; // stale instance — a newer engine has replaced us
     piAlive = false;
-    console.error(`[miro-web] pi exited (code=${code} signal=${signal})`);
-    broadcast({ type: "pi_exit", code, signal });
-    failAllPending(`pi exited (code=${code} signal=${signal})`);
+    console.error(`[miro-web] engine exited (code=${code} signal=${signal})`);
+    broadcast({ type: "engine_exit", code, signal });
+    failAllPending(`engine exited (code=${code} signal=${signal})`);
   });
 
   attachJsonlReader(me.stdout, (msg) => {
@@ -157,17 +168,17 @@ function startPi() {
 
   me.stderr.on("data", (chunk) => {
     const text = chunk.toString();
-    process.stderr.write(`[pi] ${text}`);
-    broadcast({ type: "pi_stderr", text });
+    process.stderr.write(`[miro-engine] ${text}`);
+    broadcast({ type: "engine_stderr", text });
   });
 }
 
-// Restart the pi subprocess (e.g. after writing auth.json so new credentials apply).
+// Restart the engine subprocess (e.g. after writing auth.json so new credentials apply).
 function restartPi() {
-  console.log("[miro-web] restarting pi subprocess");
+  console.log("[miro-web] restarting engine subprocess");
   startPi();
   setTimeout(() => {
-    broadcast({ type: "pi_restarted" });
+    broadcast({ type: "engine_restarted" });
   }, 500);
 }
 
@@ -214,8 +225,8 @@ function attachJsonlReader(stream, onLine) {
 
 pi.stderr.on("data", (chunk) => {
   const text = chunk.toString();
-  process.stderr.write(`[pi] ${text}`);
-  broadcast({ type: "pi_stderr", text });
+  process.stderr.write(`[miro-engine] ${text}`);
+  broadcast({ type: "engine_stderr", text });
 });
 
 function failAllPending(message) {
@@ -242,7 +253,7 @@ function broadcast(msg) {
 }
 
 // ---------------------------------------------------------------------------
-// Session dir resolution (same precedence as pi: flag > env > settings > default)
+// Session dir resolution (flag > env > settings > default)
 // ---------------------------------------------------------------------------
 
 function expandPath(p, base) {
@@ -253,8 +264,8 @@ function expandPath(p, base) {
 
 async function resolveSessionDir() {
   if (args.sessionDir) return expandPath(args.sessionDir);
-  if (process.env.PI_CODING_AGENT_SESSION_DIR) return expandPath(process.env.PI_CODING_AGENT_SESSION_DIR);
-  for (const settingsFile of [join(HOME, ".pi", "settings.json"), join(args.cwd, ".pi", "settings.json")]) {
+  if (process.env.MIRO_CODING_AGENT_DIR) return expandPath(join(process.env.MIRO_CODING_AGENT_DIR, "sessions"));
+  for (const settingsFile of [join(AGENT_DIR, "settings.json"), join(args.cwd, ".miro", "settings.json")]) {
     try {
       const s = JSON.parse(await readFile(settingsFile, "utf8"));
       if (typeof s.sessionDir === "string") return expandPath(s.sessionDir);
@@ -262,7 +273,7 @@ async function resolveSessionDir() {
       /* no settings */
     }
   }
-  return join(HOME, ".pi", "agent", "sessions");
+  return join(AGENT_DIR, "sessions");
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +346,7 @@ async function listSessions() {
 }
 
 /* ---------------------------------------------------------------------------
- * Auth / config endpoints (credential management, pi.dev-style /login)
+ * Auth / config endpoints (credential management, /login)
  * --------------------------------------------------------------------------- */
 
 async function readAuth() {
@@ -416,7 +427,7 @@ async function handleDeleteAuth(req, res) {
 
 async function handleGetSettings(res) {
   const settings = {};
-  for (const f of [join(HOME, ".pi", "settings.json"), join(args.cwd, ".pi", "settings.json")]) {
+  for (const f of [join(AGENT_DIR, "settings.json"), join(args.cwd, ".miro", "settings.json")]) {
     try {
       Object.assign(settings, JSON.parse(await readFile(f, "utf8")));
     } catch {
@@ -485,7 +496,7 @@ function handleCommand(req, res) {
       return sendJSON(res, 400, { type: "response", command: "parse", success: false, error: "Invalid JSON body" });
     }
     if (!piAlive) {
-      return sendJSON(res, 503, { type: "response", command: cmd.type, success: false, error: "pi is not running" });
+      return sendJSON(res, 503, { type: "response", command: cmd.type, success: false, error: "engine is not running" });
     }
     if (!cmd.id) cmd.id = crypto.randomUUID();
 
