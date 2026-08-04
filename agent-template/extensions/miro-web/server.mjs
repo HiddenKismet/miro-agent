@@ -639,20 +639,21 @@ async function handleTasks(req, res, url) {
 
 // Project picker: distinct git-repository directories derived from saved
 // sessions' cwds, enriched with branch / dirty / remote / last-used hints so
-// the UI can show context instead of bare paths.
+// the UI can show context instead of bare paths. Deduplicates by git root
+// (rev-parse --show-toplevel), keeping the most recently used entry per root.
 async function handleProjects(req, res, url) {
   const sessions = await listSessions();
-  const byCwd = new Map();
+  const byRoot = new Map();
   for (const s of sessions) {
     if (!s.cwd) continue;
-    const cur = byCwd.get(s.cwd);
-    if (!cur || s.mtime > cur.mtime) byCwd.set(s.cwd, s);
+    const top = await execGit(s.cwd, ["rev-parse", "--show-toplevel"]);
+    if (top.code !== 0) continue;
+    const root = top.stdout.trim();
+    const cur = byRoot.get(root);
+    if (!cur || s.mtime > cur.lastUsed) byRoot.set(root, { cwd: s.cwd, lastUsed: s.mtime });
   }
   const projects = [];
-  for (const [cwd, s] of byCwd) {
-    const top = await execGit(cwd, ["rev-parse", "--show-toplevel"]);
-    if (top.code !== 0) continue; // not a git repo
-    const root = top.stdout.trim();
+  for (const [root, { cwd, lastUsed }] of byRoot) {
     const branchR = await execGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
     const status = await execGit(cwd, ["status", "--porcelain"]);
     const remoteR = await execGit(cwd, ["config", "--get", "remote.origin.url"]);
@@ -663,11 +664,35 @@ async function handleProjects(req, res, url) {
       branch: branchR.code === 0 ? branchR.stdout.trim() : "",
       dirty,
       remote: remoteR.code === 0 ? remoteR.stdout.trim() : "",
-      lastUsed: s.mtime,
+      lastUsed,
     });
   }
   projects.sort((a, b) => b.lastUsed - a.lastUsed);
   sendJSON(res, 200, { ok: true, projects });
+}
+
+// Directory scan for inline path autocomplete: given a typed path prefix,
+// return the subdirectories of its parent so the client can fuzzy-match.
+// The client owns matching/ranking (single scoring function in app.js).
+async function handleScanDir(req, res, url) {
+  const prefix = (url.searchParams.get("prefix") || "").trim();
+  const out = { ok: true, dir: "", frag: "", entries: [] };
+  if (!prefix) return sendJSON(res, 200, out);
+  const e = expandPath(prefix, args.cwd);
+  out.dir = dirname(e);
+  out.frag = basename(e);
+  if (!out.frag || out.frag === "." || out.frag === "/") return sendJSON(res, 200, out);
+  let names;
+  try {
+    names = await readdir(out.dir, { withFileTypes: true });
+  } catch {
+    return sendJSON(res, 200, out);
+  }
+  out.entries = names
+    .filter((d) => d.isDirectory())
+    .slice(0, 300)
+    .map((d) => ({ name: d.name, path: join(out.dir, d.name) }));
+  sendJSON(res, 200, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +868,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && path === "/api/projects") {
     try {
       return await handleProjects(req, res, url);
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.message });
+    }
+  }
+
+  if (req.method === "GET" && path === "/api/scan-dir") {
+    try {
+      return await handleScanDir(req, res, url);
     } catch (e) {
       return sendJSON(res, 500, { error: e.message });
     }

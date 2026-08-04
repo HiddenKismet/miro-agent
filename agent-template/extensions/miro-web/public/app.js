@@ -42,6 +42,7 @@ const I18N = {
     projectPickerTitle: "选择项目",
     manualPath: "手动输入路径",
     projectPathPlaceholder: "项目路径…",
+    noProjectMatches: "无匹配 — Enter 将按输入路径进入",
     enteredProject: "已进入",
     settings: "设置",
     appearance: "外观",
@@ -156,6 +157,7 @@ const I18N = {
     projectPickerTitle: "Choose a project",
     manualPath: "Enter a path",
     projectPathPlaceholder: "Project path…",
+    noProjectMatches: "no matches — Enter uses the typed path",
     enteredProject: "Entered",
     settings: "Settings",
     appearance: "Appearance",
@@ -1610,7 +1612,10 @@ const LOCAL_COMMANDS = [
   { name: "/kanban", desc: "打开创作看板", run: () => {
     if (!kanbanView) toggleKanban();
   } },
-  { name: "/project", desc: "进入项目目录", run: enterProject },
+  { name: "/project", desc: "进入项目目录", run: (arg) => {
+    if (arg && arg.trim()) enterProjectCwd(arg.trim());
+    else enterProject();
+  } },
   { name: "/scratch", desc: "切换到临时会话目录", run: enterScratch },
 ];
 
@@ -1867,9 +1872,66 @@ function closeCmdMenu() {
   cmdMenu.innerHTML = "";
 }
 
+// guards against stale async renders when the user types quickly
+let projectMenuSeq = 0;
+
+// Async renderer for the "/project <path>" inline autocomplete: known
+// projects (fuzzy) + a live filesystem scan of the typed prefix.
+async function renderProjectsAsync(m) {
+  const seq = ++projectMenuSeq;
+  const frag = (m.filter || "").trim();
+  const items = [];
+  const seen = new Set();
+  const push = (path, name, desc, score) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    items.push({ path, name, desc, score, run: () => enterProjectCwd(path) });
+  };
+  const projs = await getProjectsCached();
+  for (const p of projs) {
+    const full = fuzzyMatch(frag, p.cwd);
+    const byName = fuzzyMatch(frag, p.basename);
+    if (full.ok || byName.ok) {
+      const hint = [p.branch, p.dirty && `●${p.dirty}`, p.remote].filter(Boolean).join(" · ");
+      push(p.cwd, p.basename, hint || p.cwd, Math.max(full.score, byName.score));
+    }
+  }
+  const dirs = await scanDirFuzzy(frag, 12);
+  for (const d of dirs) push(d.path, d.name, d.path, d.score);
+  if (seq !== projectMenuSeq) return; // stale keystroke
+  items.sort((a, b) => b.score - a.score);
+  m.items = items.slice(0, 8);
+  m.index = Math.min(m.index, Math.max(0, m.items.length - 1));
+  cmdMenu.innerHTML = "";
+  if (m.items.length === 0) {
+    const head = el("div", "cmd-menu-head");
+    head.textContent = t("noProjectMatches");
+    cmdMenu.appendChild(head);
+    return;
+  }
+  m.items.forEach((it, i) => {
+    const row = el("div", "cmd-menu-item" + (i === m.index ? " selected" : ""));
+    const name = el("span", "c-name");
+    name.textContent = it.name;
+    const desc = el("span", "c-desc");
+    desc.textContent = it.desc;
+    row.append(name, desc);
+    row.addEventListener("mousemove", () => {
+      m.index = i;
+      renderProjectsAsync(m);
+    });
+    row.addEventListener("click", () => executeCmdItem(it));
+    cmdMenu.appendChild(row);
+  });
+}
+
 function renderCmdMenu() {
   const m = state.cmdMenu;
   if (!m) return;
+  if (m.mode === "projects") {
+    renderProjectsAsync(m);
+    return;
+  }
   let items;
   if (m.mode === "sessions") {
     items = state.sessions.map((s) => ({
@@ -2356,6 +2418,43 @@ async function enterProjectCwd(cwd) {
   }
 }
 
+// Cached project list for the project picker and inline path autocomplete.
+let projectListCache = null;
+function getProjectsCached() {
+  if (projectListCache) return Promise.resolve(projectListCache);
+  return fetch("/api/projects", { headers: apiHeaders() })
+    .then((r) => r.json())
+    .then((d) => {
+      projectListCache = d.ok && d.projects ? d.projects : [];
+      return projectListCache;
+    })
+    .catch(() => {
+      projectListCache = [];
+      return projectListCache;
+    });
+}
+
+// Live filesystem scan for the typed path prefix (best-effort; the client
+// fuzzy-matches the returned directory names for consistent ranking).
+function scanDirFuzzy(frag, limit) {
+  return fetch(`/api/scan-dir?prefix=${encodeURIComponent(frag)}`, { headers: apiHeaders() })
+    .then((r) => r.json())
+    .then((d) => {
+      if (!d.ok || !d.entries) return [];
+      const out = [];
+      for (const en of d.entries) {
+        const byName = fuzzyMatch(frag, en.name);
+        const byPath = fuzzyMatch(frag, en.path);
+        if (byName.ok || byPath.ok) {
+          out.push({ path: en.path, name: en.name, score: Math.max(byName.score, byPath.score) });
+        }
+      }
+      out.sort((a, b) => b.score - a.score);
+      return out.slice(0, limit);
+    })
+    .catch(() => []);
+}
+
 function enterScratch() {
   enterProjectCwd("~/.miro/scratch");
 }
@@ -2370,30 +2469,64 @@ function relTime(ms) {
 }
 
 // VSCode quick-open style fuzzy path matcher (mirrors miro-tui/fuzzy.go).
+// Order-exchangeable AND semantics: every space/separator-separated term must
+// match the target as a subsequence, each term independently and in any
+// order. Each term uses its best-scoring alignment (never greedy), with
+// bonuses for path-segment starts, word boundaries, camelCase transitions,
+// basename matches and consecutive runs, and a penalty for gaps.
 function fuzzyMatch(query, target) {
   const q = query.toLowerCase().trim();
   const t = target.toLowerCase();
   if (!q) return { ok: true, score: 0 };
   const terms = q.split(/[/\\ :]+/).filter(Boolean);
   if (!terms.length) return { ok: true, score: 0 };
-  const isSeg = (i) => i === 0 || "/\\: .".includes(t[i - 1]);
-  const isWord = (i) => i === 0 || "-_. :/\\".includes(t[i - 1]);
-  let pos = 0, score = 0;
+  const baseStart = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\")) + 1;
+  let total = 0;
   for (const term of terms) {
-    let ti = pos, prev = -1;
-    for (let qi = 0; qi < term.length; qi++) {
-      let j = t.indexOf(term[qi], ti);
-      if (j === -1) return { ok: false, score: 0 };
-      if (isSeg(j)) score += 15;
-      else if (isWord(j)) score += 8;
-      if (qi === 0) score += 5;
-      if (j === prev + 1) score += 6;
-      prev = j;
-      ti = j + 1;
-    }
-    pos = prev + 1;
+    const r = bestTermMatch(term, t, target, baseStart);
+    if (!r.ok) return { ok: false, score: 0 };
+    total += r.score;
   }
-  return { ok: true, score };
+  return { ok: true, score: total };
+}
+
+const FUZZY_IMPOSSIBLE = -(1 << 30);
+
+function bestTermMatch(term, t, tOrig, baseStart) {
+  const n = t.length;
+  const memo = new Map();
+  const charScore = (j, prev, qi) => {
+    let s = 0;
+    if (qi === 0) s += 20;
+    if (j === 0) s += 100;
+    else if ("/\\:".includes(t[j - 1])) s += 100;
+    else if ("-_. ".includes(t[j - 1])) s += 50;
+    else if (/[a-z]/.test(tOrig[j - 1]) && /[A-Z]/.test(tOrig[j])) s += 50;
+    if (j >= baseStart) s += 30;
+    if (prev >= 0) {
+      if (j === prev + 1) s += 15;
+      else s -= Math.min(32, 4 * (j - prev - 1));
+    }
+    return s;
+  };
+  const rec = (qi, start) => {
+    if (qi === term.length) return 0;
+    const key = qi + ":" + start;
+    if (memo.has(key)) return memo.get(key);
+    let best = FUZZY_IMPOSSIBLE;
+    const c = term[qi];
+    for (let j = start; j < n; j++) {
+      if (t[j] !== c) continue;
+      const rest = rec(qi + 1, j + 1);
+      if (rest === FUZZY_IMPOSSIBLE) continue;
+      const s = charScore(j, start - 1, qi) + rest;
+      if (s > best) best = s;
+    }
+    memo.set(key, best);
+    return best;
+  };
+  const best = rec(0, 0);
+  return { ok: best !== FUZZY_IMPOSSIBLE, score: best === FUZZY_IMPOSSIBLE ? 0 : best };
 }
 
 function enterProject() {
@@ -2410,9 +2543,11 @@ function enterProject() {
     const q = filter.value;
     const entries = [];
     for (const opt of listEl.querySelectorAll(".modal-option")) {
-      const target = opt.dataset.path || opt.dataset.search || "";
-      const m = fuzzyMatch(q, target);
-      entries.push({ opt, show: m.ok, score: m.score });
+      const p = fuzzyMatch(q, opt.dataset.path || "");
+      const h = fuzzyMatch(q, opt.dataset.search || "");
+      const show = p.ok || h.ok;
+      const score = p.ok && h.ok ? Math.max(p.score, h.score) : p.ok ? p.score : h.ok ? h.score : 0;
+      entries.push({ opt, show, score });
     }
     entries.sort((a, b) => (a.show === b.show ? b.score - a.score : a.show ? -1 : 1));
     for (const e of entries) {
@@ -2446,9 +2581,56 @@ function enterProject() {
     manual.addEventListener("click", () => {
       const inp = document.createElement("input");
       inp.placeholder = t("projectPathPlaceholder");
+      inp.style.marginBottom = "8px";
+      const sugg = el("div", "modal-options");
+      sugg.style.maxHeight = "260px";
+      sugg.style.overflowY = "auto";
+      const wrap = el("div");
+      wrap.appendChild(inp);
+      wrap.appendChild(sugg);
+
+      let seq = 0;
+      const renderSugg = async () => {
+        const s = ++seq;
+        const q = inp.value.trim();
+        sugg.innerHTML = "";
+        if (!q) return;
+        const items = [];
+        const seen = new Set();
+        const push = (path, name, hint, score) => {
+          if (seen.has(path)) return;
+          seen.add(path);
+          items.push({ path, name, hint, score });
+        };
+        const projs = await getProjectsCached();
+        for (const p of projs) {
+          const fm = fuzzyMatch(q, p.cwd);
+          if (fm.ok) push(p.cwd, p.basename, p.cwd, fm.score);
+        }
+        const dirs = await scanDirFuzzy(q, 12);
+        for (const d of dirs) push(d.path, d.name, d.path, d.score);
+        if (s !== seq) return; // stale keystroke
+        items.sort((a, b) => b.score - a.score);
+        for (const it of items.slice(0, 6)) {
+          const b = el("button", "modal-option");
+          const nm = el("span", "p-name");
+          nm.textContent = it.name;
+          b.appendChild(nm);
+          const ht = el("span", "p-hint");
+          ht.textContent = it.hint;
+          b.appendChild(ht);
+          b.addEventListener("click", () => {
+            closeAllModals();
+            enterProjectCwd(it.path);
+          });
+          sugg.appendChild(b);
+        }
+      };
+      inp.addEventListener("input", renderSugg);
+
       showModal({
         title: t("manualPath"),
-        body: inp,
+        body: wrap,
         actions: [
           {
             label: t("ok"),
@@ -2648,6 +2830,21 @@ function init() {
       if (!v.startsWith("/")) closeCmdMenu();
       return;
     }
+    // inline path autocomplete: "/project <path>" suggests matching dirs
+    if (v.startsWith("/project ")) {
+      const arg = v.slice("/project ".length);
+      if (!arg.trim()) {
+        closeCmdMenu();
+        return;
+      }
+      if (!state.cmdMenu) state.cmdMenu = { mode: "projects", filter: "", items: [], index: 0 };
+      state.cmdMenu.mode = "projects";
+      state.cmdMenu.filter = arg;
+      state.cmdMenu.index = 0;
+      renderCmdMenu();
+      cmdMenu.hidden = false;
+      return;
+    }
     // type "/" to start matching commands, like the Miro TUI
     if (v.startsWith("/") && !v.includes(" ")) {
       if (!state.cmdMenu) state.cmdMenu = { mode: "commands", filter: "", items: [], index: 0 };
@@ -2691,12 +2888,16 @@ function init() {
         return;
       }
       if (e.key === "Tab") {
-        // complete the command name in the input box
+        // complete the command name / project path in the input box
         e.preventDefault();
         if (m.items[m.index]) {
-          const name = m.items[m.index].name;
-          const slashIdx = inputEl.value.lastIndexOf("/");
-          inputEl.value = inputEl.value.slice(0, slashIdx) + name;
+          const it = m.items[m.index];
+          if (m.mode === "projects") {
+            inputEl.value = "/project " + it.path + " ";
+          } else {
+            const slashIdx = inputEl.value.lastIndexOf("/");
+            inputEl.value = inputEl.value.slice(0, slashIdx) + it.name;
+          }
           const pos = inputEl.value.length;
           inputEl.setSelectionRange(pos, pos);
           closeCmdMenu();

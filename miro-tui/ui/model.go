@@ -56,6 +56,14 @@ type Model struct {
 	// project picker overlay for /project
 	ppicker *projectPickerState
 
+	// inline path autocomplete for "/project <path>" typed directly
+	pmenu *pathMenuState
+
+	// cached project list for the picker and the inline path autocomplete
+	// (project discovery shells out to git, so it must not run per keystroke)
+	projectsCache   []Project
+	projectsCacheAt time.Time
+
 	// when set, the TUI quits and main relaunches with --project <dir>
 	relaunchDir string
 
@@ -126,6 +134,18 @@ func (m *Model) ppRecalc() {
 	if m.ppicker.selected < 0 && len(m.ppicker.items) > 0 {
 		m.ppicker.selected = 0
 	}
+}
+
+// knownProjects returns the cached project list, refreshing it when missing
+// or stale. ListProjects shells out to git per repository, so it must not
+// run on every keystroke.
+func (m *Model) knownProjects() []Project {
+	if m.projectsCache != nil && time.Since(m.projectsCacheAt) < 60*time.Second {
+		return m.projectsCache
+	}
+	m.projectsCache = ListProjects()
+	m.projectsCacheAt = time.Now()
+	return m.projectsCache
 }
 
 // RelaunchDir returns the directory to relaunch into, or "" for a normal exit.
@@ -316,6 +336,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	// inline path autocomplete for "/project <path>" — selection keys take
+	// priority; other keys fall through to the textarea so the menu can be
+	// recomputed from the updated input below
+	if m.pmenu != nil && m.pmenu.active {
+		switch msg.String() {
+		case "up", "k":
+			if len(m.pmenu.matches) > 0 {
+				m.pmenu.selected--
+				if m.pmenu.selected < 0 {
+					m.pmenu.selected = len(m.pmenu.matches) - 1
+				}
+			}
+			return m, nil
+		case "down", "j":
+			if len(m.pmenu.matches) > 0 {
+				m.pmenu.selected++
+				if m.pmenu.selected >= len(m.pmenu.matches) {
+					m.pmenu.selected = 0
+				}
+			}
+			return m, nil
+		case "tab":
+			if len(m.pmenu.matches) > 0 {
+				m.pmenu.complete(&m.textarea)
+			}
+			m.pmenu.active = false
+			return m, nil
+		case "esc":
+			m.pmenu.active = false
+			return m, nil
+		case "enter":
+			m.pmenu.active = false
+			if len(m.pmenu.matches) > 0 && m.pmenu.selected >= 0 {
+				m.relaunchDir = m.pmenu.matches[m.pmenu.selected].Path
+				m.textarea.SetValue("")
+				return m, tea.Quit
+			}
+			// no match: fall through to the normal /project handling below
+		}
+	}
 	// slash-command menu keys take priority while the menu is open
 		if m.menu.active && len(m.menu.matches) > 0 {
 			switch msg.String() {
@@ -419,7 +479,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.relaunchDir = expandUserPath(rest)
 					return m, tea.Quit
 				}
-				projects := ListProjects()
+				projects := m.knownProjects()
 				if len(projects) == 0 {
 					m.lines = append(m.lines, chatLine{kind: kindInfo, text: "⚠ 没有找到项目（可输入 /project <路径> 直接进入）"})
 					return m, nil
@@ -467,6 +527,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
 	m.menu.update(m.textarea.Value())
+	// inline path autocomplete: recompute whenever "/project <path>" is typed
+	text := m.textarea.Value()
+	if m.pmenu != nil && !strings.HasPrefix(text, "/project ") {
+		m.pmenu.update("", nil)
+	} else if strings.HasPrefix(text, "/project ") {
+		if m.pmenu == nil {
+			m.pmenu = &pathMenuState{}
+		}
+		m.pmenu.update(text, m.knownProjects())
+	}
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	m.layout()
@@ -804,6 +874,33 @@ func (m Model) View() string {
 			Render(strings.Join(lines, "\n")) + "\n"
 	}
 
+	// inline path autocomplete for "/project <path>"
+	pathMenu := ""
+	if m.pmenu != nil && m.pmenu.active && len(m.pmenu.matches) > 0 {
+		lines := []string{
+			lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("路径联想 · ↑↓ 选择 · Tab 补全 · Enter 进入 · Esc 关闭"),
+		}
+		for i, s := range m.pmenu.matches {
+			prefix := "   "
+			style := lipgloss.NewStyle().Foreground(colorMuted)
+			if i == m.pmenu.selected {
+				prefix = " ❯ "
+				style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+			line := style.Render(prefix + filepath.Base(s.Path))
+			if s.Hint != "" {
+				line += " " + lipgloss.NewStyle().Foreground(colorDim).Render(s.Hint)
+			}
+			lines = append(lines, line)
+		}
+		pathMenu = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBorder).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(strings.Join(lines, "\n")) + "\n"
+	}
+
 	// task board overlay (/kanban)
 	board := ""
 	if m.board != nil && m.board.active {
@@ -881,6 +978,7 @@ func (m Model) View() string {
 		m.viewport.View(),
 		picker,
 		menu,
+		pathMenu,
 		board,
 		ppicker,
 		input,
