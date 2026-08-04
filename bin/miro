@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
 # Miro Personal Agent — launcher
-# Built on the Pi Agent core. Miro uses its own isolated agent home
-# (~/.miro/agent) so its sessions, credentials, and built-in features stay
-# separate from a plain Pi install.
+#
+# Runs Miro's OWN white-labeled copy of the Pi Agent engine (patched via the
+# official piConfig hook: title, header and env prefix all say "miro").
+# Miro lives in its own home (~/.miro), fully isolated from any global pi
+# install — sessions, credentials, themes and extensions are separate.
 set -euo pipefail
 
 MIRO_HOME="${MIRO_HOME:-$HOME/.miro}"
-export PI_CODING_AGENT_DIR="$MIRO_HOME/agent"
-export MIRO_HOME
+CORE_BIN="$MIRO_HOME/core/node_modules/.bin/pi"
 
-if [ ! -d "$PI_CODING_AGENT_DIR" ]; then
-  echo "Miro: agent home '$PI_CODING_AGENT_DIR' not found." >&2
-  echo "Run ./install.sh inside the miro-agent project first." >&2
+export MIRO_HOME
+export MIRO_CODING_AGENT_DIR="$MIRO_HOME/agent"
+
+if [ ! -d "$MIRO_CODING_AGENT_DIR" ] || [ ! -x "$CORE_BIN" ]; then
+  echo "Miro: installation incomplete." >&2
+  if [ ! -x "$CORE_BIN" ]; then
+    echo "  core engine missing: $CORE_BIN" >&2
+  fi
+  if [ ! -d "$MIRO_CODING_AGENT_DIR" ]; then
+    echo "  agent home missing: $MIRO_CODING_AGENT_DIR" >&2
+  fi
+  echo "Run ./install.sh inside the miro-agent project." >&2
   exit 1
 fi
 
-exec pi "$@"
+exec "$CORE_BIN" "$@"

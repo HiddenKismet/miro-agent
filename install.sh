@@ -30,11 +30,6 @@ echo "✦ Miro Personal Agent installer"
 echo "  home: $MIRO_HOME"
 
 # --- prerequisites -----------------------------------------------------------
-if ! command -v pi >/dev/null 2>&1; then
-  echo "Miro requires the Pi Agent core (pi) on PATH." >&2
-  echo "Install it with: npm i -g @earendil-works/pi-coding-agent" >&2
-  exit 1
-fi
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
 
@@ -75,6 +70,40 @@ echo "  ✓ settings.json packages: subagents, pi-task, glla (goal)"
 # --- web UI frontend deps ------------------------------------------------------
 (cd "$AGENT_DIR/extensions/miro-web" && npm install --silent)
 echo "  ✓ miro-web dependencies"
+
+# --- Miro core: local white-labeled Pi Agent engine ---------------------------
+# A private copy of @earendil-works/pi-coding-agent, patched via its official
+# piConfig white-label hook so the TUI shows "miro" (title, header, env prefix)
+# instead of "pi". Global pi stays untouched.
+CORE_DIR="$MIRO_HOME/core"
+CORE_BIN="$CORE_DIR/node_modules/.bin/pi"
+CORE_PKG_JSON="$CORE_DIR/package.json"
+CORE_PI_PKG="$CORE_DIR/node_modules/@earendil-works/pi-coding-agent/package.json"
+
+if [ ! -x "$CORE_BIN" ]; then
+  echo "  ⏳ installing Miro core (Pi Agent engine, ~160MB)..."
+  mkdir -p "$CORE_DIR"
+  [ -f "$CORE_PKG_JSON" ] || printf '{\n  "name": "miro-core",\n  "private": true\n}\n' > "$CORE_PKG_JSON"
+  (cd "$CORE_DIR" && npm install --no-audit --no-fund --silent @earendil-works/pi-coding-agent)
+  echo "  ✓ Miro core installed"
+else
+  echo "  ✓ Miro core present ($CORE_BIN)"
+fi
+
+# patch the official white-label hook (idempotent)
+node - "$CORE_PI_PKG" <<'EOF'
+const fs = require("fs");
+const file = process.argv[2];
+const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+const want = { name: "miro", configDir: ".miro" };
+if (JSON.stringify(pkg.piConfig) !== JSON.stringify(want)) {
+  pkg.piConfig = want;
+  fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+  console.log("  ✓ core white-labeled: piConfig =", JSON.stringify(want));
+} else {
+  console.log("  ✓ core white-label patch already applied");
+}
+EOF
 
 # --- inherit credentials from Pi (only when Miro has none yet) -----------------
 if [ ! -f "$AGENT_DIR/auth.json" ] && [ -f "$HOME/.pi/agent/auth.json" ]; then

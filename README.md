@@ -18,6 +18,23 @@ Miro 源自拉丁语「miror」，意为观察、探寻、洞察。
 | **Tasks** | 工作流任务 + 重启自动续跑 | `/task` |
 | **Goal** | 目标 + 列表 + 审计 + 循环优化 | `/goal` `/list` `/loop` |
 
+## 架构：深度白标（原生内核）
+
+Miro 不是扩展集合，而是自带一份**白标化的 Pi Agent 引擎**：
+
+```
+~/.miro/
+├── bin/miro          # 启动器
+├── core/             # 本地 Pi Agent 引擎副本（经官方 piConfig 白标）
+│                     #   标题栏/头部/环境变量全部显示 "miro"
+└── agent/            # Miro 家目录（会话、凭据、主题、扩展）
+    ├── AGENTS.md     # Miro 身份与行为准则
+    ├── extensions/   # miro-web、miro-brand、auto-task-resume
+    └── themes/       # miro-dark / miro-light（薄荷青）
+```
+
+全局的 pi 完全不受影响；两者可并存。
+
 ## 安装
 
 ```bash
@@ -28,8 +45,10 @@ cd miro-agent
 
 安装器会：
 
-- 创建 `~/.miro/agent/`（Miro 专属家目录，与 Pi 完全隔离）
-- 内置 miro-web、任务自动续跑、Miro 品牌钩子
+- 安装 Miro 专属 Pi Agent 引擎副本到 `~/.miro/core/`（约 160MB）
+- 通过官方 `piConfig` 钩子白标引擎（TUI 标题、头部、`MIRO_*` 环境变量）
+- 创建 `~/.miro/agent/` 家目录（与 Pi 完全隔离）
+- 内置 miro-web、任务自动续跑、Miro 品牌钩子、薄荷青主题
 - 配置 packages：subagents、pi-task、goal(glla)
 - 首次安装时从 `~/.pi/agent/auth.json` 继承凭据（如存在）
 
