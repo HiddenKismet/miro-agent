@@ -88,7 +88,7 @@ Options:
   -h, --help          Show this help`);
         process.exit(0);
       default:
-        console.warn(`[pi-web] ignoring unknown arg: ${a}`);
+        console.warn(`[miro-web] ignoring unknown arg: ${a}`);
     }
   }
 }
@@ -108,8 +108,8 @@ function buildPiArgs() {
 }
 
 const piArgs = buildPiArgs();
-console.log(`[pi-web] spawning: ${args.pi} ${piArgs.join(" ")}`);
-console.log(`[pi-web] cwd: ${args.cwd}`);
+console.log(`[miro-web] spawning: ${args.pi} ${piArgs.join(" ")}`);
+console.log(`[miro-web] cwd: ${args.cwd}`);
 
 let pi = null;
 let piAlive = false;
@@ -131,7 +131,7 @@ function startPi() {
   me.on("error", (err) => {
     if (pi !== me) return; // stale instance
     piAlive = false;
-    console.error(`[pi-web] failed to spawn pi: ${err.message}`);
+    console.error(`[miro-web] failed to spawn pi: ${err.message}`);
     broadcast({ type: "server_error", message: `Failed to start pi: ${err.message}` });
     failAllPending(err.message);
   });
@@ -139,7 +139,7 @@ function startPi() {
   me.on("exit", (code, signal) => {
     if (pi !== me) return; // stale instance — a newer pi has replaced us
     piAlive = false;
-    console.error(`[pi-web] pi exited (code=${code} signal=${signal})`);
+    console.error(`[miro-web] pi exited (code=${code} signal=${signal})`);
     broadcast({ type: "pi_exit", code, signal });
     failAllPending(`pi exited (code=${code} signal=${signal})`);
   });
@@ -164,7 +164,7 @@ function startPi() {
 
 // Restart the pi subprocess (e.g. after writing auth.json so new credentials apply).
 function restartPi() {
-  console.log("[pi-web] restarting pi subprocess");
+  console.log("[miro-web] restarting pi subprocess");
   startPi();
   setTimeout(() => {
     broadcast({ type: "pi_restarted" });
@@ -658,7 +658,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(args.port, args.host, () => {
   const url = `http://${args.host === "0.0.0.0" ? "localhost" : args.host}:${args.port}`;
-  console.log(`[pi-web] serving at ${url}`);
+  console.log(`[miro-web] serving at ${url}`);
   if (args.open) openBrowser(url);
 });
 
@@ -675,7 +675,7 @@ function openBrowser(url) {
 }
 
 function shutdown() {
-  console.log("[pi-web] shutting down");
+  console.log("[miro-web] shutting down");
   try {
     pi.stdin.end();
   } catch {
