@@ -229,11 +229,13 @@ func (c *Client) send(command map[string]any) error {
 	return err
 }
 
-// Close terminates the subprocess.
+// Close terminates the subprocess and waits for it to be reaped, so no
+// stray engine keeps writing into our (soon to be closed) stdout pipe.
 func (c *Client) Close() {
 	_ = c.stdin.Close()
 	if c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
 	}
 }
 
