@@ -21,7 +21,7 @@ Miro 源自拉丁语「miror」，意为观察、探寻、洞察。
 ## 安装
 
 ```bash
-git clone <repo> miro-agent
+git clone https://github.com/HiddenKismet/miro-agent.git
 cd miro-agent
 ./install.sh
 ```
