@@ -43,10 +43,20 @@ export default function (pi: ExtensionAPI) {
     if (event.reason !== "startup" && event.reason !== "resume") return;
     fired = true;
 
+    // Capture synchronously: the ctx object is only valid until the next await
+    // and must not be used after a session replacement/reload.
+    const cwd = (() => {
+      try {
+        return ctx.sessionManager?.getCwd?.() || ctx.cwd;
+      } catch {
+        return ctx.cwd;
+      }
+    })();
+
     // Let the session fully load before queuing anything.
     setTimeout(async () => {
       try {
-        if (!(await hasUnfinishedAutoRun(ctx.cwd))) return;
+        if (!(await hasUnfinishedAutoRun(cwd))) return;
         // followUp delivery: only delivered once the agent is idle.
         pi.sendUserMessage("/task-auto-resume --unattended", { deliverAs: "followUp" });
       } catch {

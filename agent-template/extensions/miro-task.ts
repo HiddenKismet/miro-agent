@@ -125,6 +125,22 @@ export default function (pi: ExtensionAPI) {
   // Dialogs must never hang the agent (see miro-git.ts for details).
   const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
     Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
+  // Use the ACTIVE SESSION's directory, not the process launch dir (the web
+  // engine spawns from the server dir, which is not the user's project).
+  const sessionCwd = (ctx: ExtensionContext): string => {
+    try {
+      return ctx.sessionManager?.getCwd?.() || sessionCwd(ctx);
+    } catch {
+      return sessionCwd(ctx);
+    }
+  };
+  // Resolve the enclosing git repository root so tasks point at the project
+  // repo even when the agent runs from a subdirectory or the server dir.
+  async function repoRoot(cwd: string): Promise<string> {
+    const r = await git(cwd, ["rev-parse", "--show-toplevel"]);
+    if (ok(r) && r.stdout.trim()) return r.stdout.trim();
+    return cwd;
+  }
 
   async function defaultBranch(cwd: string): Promise<string | undefined> {
     for (const name of ["main", "master"]) {
@@ -160,7 +176,7 @@ export default function (pi: ExtensionAPI) {
       title: trimmed,
       description: description?.trim() || undefined,
       stage: "proposed",
-      cwd: ctx.cwd,
+      cwd: await repoRoot(sessionCwd(ctx)),
       createdAt: now,
       updatedAt: now,
     };
@@ -200,11 +216,11 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       let task = params.taskId ? readTask(params.taskId) : undefined;
       if (!task) {
-        const candidates = listTasks().filter((t) => t.cwd === ctx.cwd && t.stage !== "done");
+        const candidates = listTasks().filter((t) => t.cwd === sessionCwd(ctx) && t.stage !== "done");
         task = params.taskId ? undefined : candidates[0];
       }
       if (!task) return failText(`未找到任务：${params.taskId || "(当前仓库没有未完成任务)"}`);
-      if (task.cwd !== ctx.cwd) return failText(`任务属于其他目录（${task.cwd}），当前目录是 ${ctx.cwd}`);
+      if (task.cwd !== sessionCwd(ctx)) return failText(`任务属于其他目录（${task.cwd}），当前目录是 ${sessionCwd(ctx)}`);
       if (ctx.hasUI) {
         const confirmed = await withTimeout(ctx.ui.confirm(`开始任务 ${task.id}？`, `标题：${task.title}\n将检出 task/<slug> 分支并标记为「进行中」。`), 30000, false);
         if (!confirmed) return failText("已取消");
@@ -231,7 +247,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       let task = params.taskId ? readTask(params.taskId) : undefined;
       if (!task) {
-        const candidates = listTasks().filter((t) => t.cwd === ctx.cwd);
+        const candidates = listTasks().filter((t) => t.cwd === sessionCwd(ctx));
         task = candidates.find((t) => t.stage === "in_progress") || candidates.find((t) => t.stage === "proposed");
       }
       if (!task) return failText(`未找到任务：${params.taskId || "(当前仓库没有进行中/待开始的任务)"}`);
@@ -273,7 +289,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       let task = params.taskId ? readTask(params.taskId) : undefined;
-      if (!task) task = listTasks().find((t) => t.cwd === ctx.cwd && t.stage === "pending_review");
+      if (!task) task = listTasks().find((t) => t.cwd === sessionCwd(ctx) && t.stage === "pending_review");
       if (!task) return failText(`未找到待审核的任务：${params.taskId || "(当前仓库没有待审核任务)"}`);
       if (task.stage !== "pending_review") return failText(`任务 ${task.id} 不是「待审核」状态（当前：${stageLabel(task.stage)}）`);
       if (ctx.hasUI) {
@@ -312,7 +328,7 @@ export default function (pi: ExtensionAPI) {
       all: Type.Optional(Type.Boolean({ description: "Include tasks from all repositories" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const tasks = listTasks().filter((t) => params.all || t.cwd === ctx.cwd);
+      const tasks = listTasks().filter((t) => params.all || t.cwd === sessionCwd(ctx));
       if (tasks.length === 0) return failText("当前仓库还没有任务（可直接说「创建任务：…」，或用 task_create）");
       const lines: string[] = [];
       for (const s of STAGES) {
@@ -340,7 +356,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("task-board", {
     description: "Summarize tasks for this repository",
     handler: async (_args, ctx) => {
-      const tasks = listTasks().filter((t) => t.cwd === ctx.cwd);
+      const tasks = listTasks().filter((t) => t.cwd === sessionCwd(ctx));
       if (tasks.length === 0) {
         ctx.ui.notify("当前仓库还没有任务", "info");
         return;

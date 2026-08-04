@@ -29,6 +29,14 @@ export default function (pi: ExtensionAPI) {
   // Dialogs must never hang the agent (see miro-git.ts for details).
   const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
     Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
+  // Use the ACTIVE SESSION's directory, not the process launch dir.
+  const sessionCwd = (ctx: ExtensionContext): string => {
+    try {
+      return ctx.sessionManager?.getCwd?.() || sessionCwd(ctx);
+    } catch {
+      return sessionCwd(ctx);
+    }
+  };
 
   async function resolvePr(cwd: string, pr?: string): Promise<string | null> {
     if (pr && pr.trim()) return pr.trim();
@@ -46,9 +54,9 @@ export default function (pi: ExtensionAPI) {
       pr: Type.Optional(Type.String({ description: "PR number; omitted: current branch's PR" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const number = await resolvePr(ctx.cwd, params.pr);
+      const number = await resolvePr(sessionCwd(ctx), params.pr);
       if (!number) return failText("没有找到 PR（当前分支可能没有关联 PR，或 gh 未登录）。请提供 PR 编号。");
-      const view = await gh(ctx.cwd, ["pr", "view", number, "--json", "number,title,author,state,headRefName,baseRefName,body,additions,deletions,changedFiles"]);
+      const view = await gh(sessionCwd(ctx), ["pr", "view", number, "--json", "number,title,author,state,headRefName,baseRefName,body,additions,deletions,changedFiles"]);
       if (!ok(view)) return failText(`gh pr view 失败：${(view.stderr || "").trim()}`);
       let meta = "";
       try {
@@ -57,7 +65,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         meta = view.stdout.slice(0, 800);
       }
-      const diff = await gh(ctx.cwd, ["pr", "diff", number], { timeout: 60000 });
+      const diff = await gh(sessionCwd(ctx), ["pr", "diff", number], { timeout: 60000 });
       if (!ok(diff)) return failText(`gh pr diff 失败：${(diff.stderr || "").trim()}`);
       let text = diff.stdout;
       if (text.length > 40000) text = text.slice(0, 40000) + "\n…（diff 过长，已截断）";
@@ -77,7 +85,7 @@ export default function (pi: ExtensionAPI) {
       requestChanges: Type.Optional(Type.Boolean({ description: "Request changes instead of commenting" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const number = await resolvePr(ctx.cwd, params.pr);
+      const number = await resolvePr(sessionCwd(ctx), params.pr);
       if (!number) return failText("没有找到 PR，请提供 PR 编号。");
       const args = ["pr", "review", number];
       if (params.approve) args.push("--approve");
@@ -89,7 +97,7 @@ export default function (pi: ExtensionAPI) {
         const confirmed = await withTimeout(ctx.ui.confirm(`提交 PR #${number} 的${action}？`, params.comment ? `评论预览：\n${params.comment.slice(0, 500)}` : action), 30000, false);
         if (!confirmed) return failText("已取消");
       }
-      const r = await gh(ctx.cwd, args, { timeout: 30000 });
+      const r = await gh(sessionCwd(ctx), args, { timeout: 30000 });
       if (!ok(r)) return failText(`提交审查失败：${(r.stderr || "").trim()}`);
       return { content: [{ type: "text", text: `已提交 PR #${number} 的审查${params.approve ? "（批准）" : params.requestChanges ? "（请求修改）" : "（评论）"}` }], details: {} };
     },
@@ -98,12 +106,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("pr", {
     description: "Show a compact PR summary: /pr [number]",
     handler: async (args, ctx) => {
-      const number = await resolvePr(ctx.cwd, args);
+      const number = await resolvePr(sessionCwd(ctx), args);
       if (!number) {
         ctx.ui.notify("没有找到 PR（gh 未登录或当前分支无关联 PR）", "warning");
         return;
       }
-      const view = await gh(ctx.cwd, ["pr", "view", number, "--json", "number,title,state,headRefName,baseRefName,changedFiles"]);
+      const view = await gh(sessionCwd(ctx), ["pr", "view", number, "--json", "number,title,state,headRefName,baseRefName,changedFiles"]);
       if (!ok(view)) {
         ctx.ui.notify(`gh pr view 失败：${(view.stderr || "").trim()}`, "error");
         return;

@@ -74,6 +74,16 @@ export default function (pi: ExtensionAPI) {
   // idle). Race every dialog against a timeout and treat it as cancelled.
   const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
     Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
+  // Use the ACTIVE SESSION's working directory, not the process launch dir.
+  // In the web UI the engine is spawned from the server dir (not a project),
+  // so sessionCwd(ctx) alone would point git at the wrong place.
+  const sessionCwd = (ctx: ExtensionContext): string => {
+    try {
+      return ctx.sessionManager?.getCwd?.() || sessionCwd(ctx);
+    } catch {
+      return sessionCwd(ctx);
+    }
+  };
 
   // -------------------------------------------------------------------------
   // Status parsing
@@ -245,7 +255,7 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
 
   async function doCommit(ctx: ExtensionContext, opts: { push?: boolean; message?: string } = {}): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
-    const s = await gitStatus(ctx.cwd);
+    const s = await gitStatus(sessionCwd(ctx));
     if (!s.isRepo) return failText("当前目录不是 git 仓库");
     if (s.allChanges.length === 0) return failText("工作区干净，没有可提交的改动");
 
@@ -275,33 +285,33 @@ export default function (pi: ExtensionAPI) {
       if (!confirmed) return failText("已取消");
     }
 
-    const add = await git(ctx.cwd, ["add", "-A"]);
+    const add = await git(sessionCwd(ctx), ["add", "-A"]);
     if (!ok(add)) return failText(`git add 失败：${(add.stderr || add.stdout).trim()}`);
-    const commit = await git(ctx.cwd, ["commit", "-m", message]);
+    const commit = await git(sessionCwd(ctx), ["commit", "-m", message]);
     if (!ok(commit)) return failText(`commit 失败：${(commit.stderr || commit.stdout).trim()}`);
 
     let pushText = "";
     if (opts.push) {
-      const branch = (await git(ctx.cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
-      const p = await git(ctx.cwd, ["push", "origin", branch], { timeout: 60000 });
+      const branch = (await git(sessionCwd(ctx), ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+      const p = await git(sessionCwd(ctx), ["push", "origin", branch], { timeout: 60000 });
       pushText = ok(p) ? "\n已推送" : `\npush 失败：${(p.stderr || p.stdout).slice(0, 300)}`;
     }
 
-    audit("commit", ctx.cwd, true, { message, push: !!opts.push, files: s.allChanges.length });
+    audit("commit", sessionCwd(ctx), true, { message, push: !!opts.push, files: s.allChanges.length });
     return { content: [{ type: "text", text: `已提交 ${s.allChanges.length} 个文件\n${(commit.stdout || "").trim()}${pushText}` }], details: {} };
   }
 
   async function doPush(ctx: ExtensionContext): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
-    const s = await gitStatus(ctx.cwd);
+    const s = await gitStatus(sessionCwd(ctx));
     if (!s.isRepo) return failText("当前目录不是 git 仓库");
-    const branch = (await git(ctx.cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+    const branch = (await git(sessionCwd(ctx), ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
     if (ctx.hasUI) {
       const confirmed = await withTimeout(ctx.ui.confirm("推送当前分支？", `${branch} → origin/${branch}`), 30000, false);
       if (!confirmed) return failText("已取消");
     }
-    const p = await git(ctx.cwd, ["push", "origin", branch], { timeout: 60000 });
+    const p = await git(sessionCwd(ctx), ["push", "origin", branch], { timeout: 60000 });
     if (!ok(p)) return failText(`push 失败：${(p.stderr || p.stdout).trim()}`);
-    audit("push", ctx.cwd, true, { branch });
+    audit("push", sessionCwd(ctx), true, { branch });
     return { content: [{ type: "text", text: `已推送 ${branch} → origin/${branch}` }], details: {} };
   }
 
@@ -352,10 +362,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function doRelease(ctx: ExtensionContext, opts: { bump?: string; version?: string } = {}): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
-    const s = await gitStatus(ctx.cwd);
+    const s = await gitStatus(sessionCwd(ctx));
     if (!s.isRepo) return failText("当前目录不是 git 仓库");
 
-    const current = opts.version?.trim() || currentRepoVersion(ctx.cwd);
+    const current = opts.version?.trim() || currentRepoVersion(sessionCwd(ctx));
     if (!current) return failText("无法确定当前版本（缺少 package.json / VERSION，也没有可用版本）");
 
     let bump = opts.bump;
@@ -368,8 +378,8 @@ export default function (pi: ExtensionAPI) {
     if (bump !== "patch" && bump !== "minor" && bump !== "major") return failText(`无效的增量：${bump}`);
 
     const next = bumpVersion(current, bump);
-    const lastTag = (await git(ctx.cwd, ["describe", "--tags", "--abbrev=0"])).stdout.trim();
-    const notesRes = await git(ctx.cwd, ["log", "--oneline", "--no-decorate", lastTag ? `${lastTag}..HEAD` : "-n 30"]);
+    const lastTag = (await git(sessionCwd(ctx), ["describe", "--tags", "--abbrev=0"])).stdout.trim();
+    const notesRes = await git(sessionCwd(ctx), ["log", "--oneline", "--no-decorate", lastTag ? `${lastTag}..HEAD` : "-n 30"]);
     const notes = ok(notesRes) ? notesRes.stdout.trim() : "";
     const notesPreview = (notes || "(no commits since last tag)").slice(0, 1200);
 
@@ -391,7 +401,7 @@ export default function (pi: ExtensionAPI) {
       const confirmed = await withTimeout(
         ctx.ui.confirm(
           `发布 v${next}？`,
-          `版本文件更新 → commit → tag v${next} → push${s.isRepo && (await git(ctx.cwd, ["remote"])).stdout.trim() ? "" : "（无 remote，跳过 push）"}\n\n本次变更：\n${notesPreview}`,
+          `版本文件更新 → commit → tag v${next} → push${s.isRepo && (await git(sessionCwd(ctx), ["remote"])).stdout.trim() ? "" : "（无 remote，跳过 push）"}\n\n本次变更：\n${notesPreview}`,
         ),
         30000,
         false,
@@ -408,7 +418,7 @@ export default function (pi: ExtensionAPI) {
     ];
     const touched: string[] = [];
     for (const rel of candidates) {
-      const f = join(ctx.cwd, rel);
+      const f = join(sessionCwd(ctx), rel);
       if (!existsSync(f)) continue;
       if (rel.endsWith(".json")) setJsonVersion(f, next);
       else if (rel === "VERSION") writeFileSync(f, next + "\n");
@@ -416,32 +426,32 @@ export default function (pi: ExtensionAPI) {
     }
     if (touched.length === 0) return failText("未找到任何版本文件（package.json / VERSION），无法发布");
 
-    const add = await git(ctx.cwd, ["add", ...touched]);
+    const add = await git(sessionCwd(ctx), ["add", ...touched]);
     if (!ok(add)) return failText(`git add 失败：${(add.stderr || add.stdout).trim()}`);
-    const commit = await git(ctx.cwd, ["commit", "-m", `chore(release): v${next}`]);
+    const commit = await git(sessionCwd(ctx), ["commit", "-m", `chore(release): v${next}`]);
     if (!ok(commit)) return failText(`commit 失败：${(commit.stderr || commit.stdout).trim()}`);
-    const tag = await git(ctx.cwd, ["tag", "-a", `v${next}`, "-m", `v${next}`]);
+    const tag = await git(sessionCwd(ctx), ["tag", "-a", `v${next}`, "-m", `v${next}`]);
     if (!ok(tag)) return failText(`tag 失败：${(tag.stderr || tag.stdout).trim()}`);
 
-    const remote = (await git(ctx.cwd, ["remote"])).stdout.trim();
+    const remote = (await git(sessionCwd(ctx), ["remote"])).stdout.trim();
     let pushed = false;
     let ghResult = "";
     if (remote) {
-      const branch = (await git(ctx.cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
-      const p = await git(ctx.cwd, ["push", "origin", branch], { timeout: 60000 });
+      const branch = (await git(sessionCwd(ctx), ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+      const p = await git(sessionCwd(ctx), ["push", "origin", branch], { timeout: 60000 });
       if (!ok(p)) return failText(`push 失败：${(p.stderr || p.stdout).trim()}`);
-      const pt = await git(ctx.cwd, ["push", "--tags"], { timeout: 60000 });
+      const pt = await git(sessionCwd(ctx), ["push", "--tags"], { timeout: 60000 });
       pushed = ok(pt);
     } else {
       ghResult = "（未检测到 remote，跳过 push）";
     }
 
     try {
-      const ghCheck = await pi.exec("gh", ["--version"], { cwd: ctx.cwd });
+      const ghCheck = await pi.exec("gh", ["--version"], { cwd: sessionCwd(ctx) });
       if (ghCheck.code === 0) {
         const notesArg = `## v${next}\n\n${notes || "No release notes."}`;
         const r = await pi.exec("gh", ["release", "create", `v${next}`, "--title", `Miro v${next}`, "--notes", notesArg], {
-          cwd: ctx.cwd,
+          cwd: sessionCwd(ctx),
           timeout: 60000,
         });
         ghResult = ok(r) ? "GitHub Release 已创建" : `（gh 创建失败：${(r.stderr || r.stdout).slice(0, 300)}）`;
@@ -452,7 +462,7 @@ export default function (pi: ExtensionAPI) {
       ghResult = "（gh 不可用，请手动创建 GitHub Release）";
     }
 
-    audit("release", ctx.cwd, true, { version: next, pushed, touched });
+    audit("release", sessionCwd(ctx), true, { version: next, pushed, touched });
     return {
       content: [{ type: "text", text: `已发布 v${next}\n版本文件：${touched.join(", ")}\n${ghResult}` }],
       details: {},
@@ -471,7 +481,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       try {
-        return { content: [{ type: "text", text: formatStatus(await gitStatus(ctx.cwd)) }], details: {} };
+        return { content: [{ type: "text", text: formatStatus(await gitStatus(sessionCwd(ctx))) }], details: {} };
       } catch (e) {
         return failText(`git_status 失败：${(e as Error).message}`);
       }
@@ -494,7 +504,7 @@ export default function (pi: ExtensionAPI) {
         if (params.staged) args.push("--cached");
         if (params.stat) args.push("--stat");
         if (params.path) args.push("--", params.path);
-        const res = await git(ctx.cwd, args, { timeout: 30000 });
+        const res = await git(sessionCwd(ctx), args, { timeout: 30000 });
         if (!ok(res)) return failText(`git diff 失败：${(res.stderr || res.stdout).trim()}`);
         let text = res.stdout;
         if (text.length > 30000) text = text.slice(0, 30000) + "\n…（输出过长，已截断）";
@@ -518,7 +528,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const n = String(params.count ?? 15);
         const args = ["log", "--format=%h %ad %an %s", "--date=short", ...(params.all ? ["--all"] : []), "-n", n];
-        const res = await git(ctx.cwd, args);
+        const res = await git(sessionCwd(ctx), args);
         if (!ok(res)) return failText(`git log 失败：${(res.stderr || res.stdout).trim()}`);
         return { content: [{ type: "text", text: res.stdout.trim() || "(no commits)" }], details: {} };
       } catch (e) {
@@ -537,7 +547,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       try {
-        const res = await git(ctx.cwd, ["branch", ...(params.all ? ["-a"] : [])]);
+        const res = await git(sessionCwd(ctx), ["branch", ...(params.all ? ["-a"] : [])]);
         if (!ok(res)) return failText(`git branch 失败：${(res.stderr || res.stdout).trim()}`);
         return { content: [{ type: "text", text: res.stdout.trim() || "(no branches)" }], details: {} };
       } catch (e) {
@@ -596,12 +606,12 @@ export default function (pi: ExtensionAPI) {
     description: "Show a one-line summary of the current git repository",
     handler: async (_args, ctx) => {
       try {
-        const s = await gitStatus(ctx.cwd);
+        const s = await gitStatus(sessionCwd(ctx));
         if (!s.isRepo) {
           ctx.ui.notify("当前目录不是 git 仓库", "warning");
           return;
         }
-        const last = await git(ctx.cwd, ["log", "-1", "--format=%h %s"]);
+        const last = await git(sessionCwd(ctx), ["log", "-1", "--format=%h %s"]);
         const parts = [
           `git ${s.branch}${s.ahead ? ` ↑${s.ahead}` : ""}${s.behind ? ` ↓${s.behind}` : ""}`,
           `staged ${s.staged.length} · unstaged ${s.unstaged.length} · untracked ${s.untracked.length}`,
@@ -672,7 +682,7 @@ export default function (pi: ExtensionAPI) {
       label: Type.Optional(Type.String({ description: "Short label for the checkpoint (default: plan)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd;
+      const cwd = sessionCwd(ctx);
       const label = (params.label?.trim() || "plan").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 30) || "plan";
       const head = await git(cwd, ["rev-parse", "HEAD"]);
       if (!ok(head)) return failText(`不是 git 仓库或还没有提交：${(head.stderr || "").trim()}`);
@@ -699,7 +709,7 @@ export default function (pi: ExtensionAPI) {
       wip: Type.Optional(Type.String({ description: "WIP snapshot id to reapply after reset, if any" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd;
+      const cwd = sessionCwd(ctx);
       if (ctx.hasUI) {
         const confirmed = await withTimeout(ctx.ui.confirm("恢复到检查点？", `将 git reset --hard 到 ${params.checkpoint}（丢弃之后的所有改动）${params.wip ? "，并重放未提交快照" : ""}。继续？`), 30000, false);
         if (!confirmed) return failText("已取消");
@@ -724,7 +734,7 @@ export default function (pi: ExtensionAPI) {
     if (proposalFired || !ctx.hasUI) return;
     // Capture the primitive synchronously: the ctx object is only valid until
     // the next await, and using it after a session replacement/reload throws.
-    const cwd = ctx.cwd;
+    const cwd = sessionCwd(ctx);
     proposalFired = true;
     void (async () => {
       try {

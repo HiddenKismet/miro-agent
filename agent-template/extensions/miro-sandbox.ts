@@ -18,6 +18,14 @@ import { Type } from "typebox";
 const GIT_FLAGS: string[] = [];
 
 export default function (pi: ExtensionAPI) {
+  // Use the ACTIVE SESSION's directory, not the process launch dir.
+  const sessionCwd = (ctx: ExtensionContext): string => {
+    try {
+      return ctx.sessionManager?.getCwd?.() || ctx.cwd;
+    } catch {
+      return ctx.cwd;
+    }
+  };
   async function exec(cwd: string, args: string[], timeout: number) {
     try {
       return await pi.exec("bwrap", args, { cwd, timeout });
@@ -66,7 +74,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       return {
-        content: [{ type: "text", text: await runSandbox(ctx.cwd, params.command, !!params.network) }],
+        content: [{ type: "text", text: await runSandbox(sessionCwd(ctx), params.command, !!params.network) }],
         details: {},
       };
     },
