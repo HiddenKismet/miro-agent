@@ -107,7 +107,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 6 // header + input + footer
+		m.viewport.Height = msg.Height - 5 // header + single-line input + footer
 		if m.viewport.Height < 3 {
 			m.viewport.Height = 3
 		}
