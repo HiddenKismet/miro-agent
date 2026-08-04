@@ -3,3 +3,6 @@ node_modules/
 pi-session-*.html
 *.log
 .DS_Store
+
+# Go build artifacts
+miro-tui/miro-tui

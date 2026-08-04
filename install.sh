@@ -112,6 +112,23 @@ if [ ! -f "$AGENT_DIR/auth.json" ] && [ -f "$HOME/.pi/agent/auth.json" ]; then
   echo "  ✓ imported credentials from ~/.pi/agent/auth.json"
 fi
 
+# --- Miro TUI: native Bubble Tea frontend -------------------------------------
+# Built from source; skipped when Go is unavailable (falls back to core TUI).
+if command -v go >/dev/null 2>&1; then
+  GO=go
+elif [ -x "$HOME/.local/go/bin/go" ]; then
+  GO="$HOME/.local/go/bin/go"
+else
+  GO=""
+fi
+if [ -n "$GO" ]; then
+  echo "  ⏳ building Miro TUI (Go)..."
+  (cd "$REPO_DIR/miro-tui" && "$GO" build -o "$BIN_DIR/miro-tui" .)
+  echo "  ✓ miro-tui binary: $BIN_DIR/miro-tui"
+else
+  echo "  ⚠ go not found — skipping miro-tui build (falling back to core TUI)"
+fi
+
 # --- launcher -------------------------------------------------------------------
 cp "$REPO_DIR/bin/miro" "$BIN_DIR/miro"
 chmod +x "$BIN_DIR/miro"

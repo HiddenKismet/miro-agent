@@ -1,0 +1,177 @@
+// Package rpc drives a pi --mode rpc subprocess with JSONL commands/events.
+package rpc
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"sync"
+	"sync/atomic"
+)
+
+// Event is one JSONL line from pi stdout.
+type Event struct {
+	Type string
+	Raw  json.RawMessage
+	Data map[string]any
+}
+
+// Client manages the pi subprocess.
+type Client struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	events chan Event
+	done   chan struct{}
+	nextID atomic.Int64
+
+	mu      sync.Mutex
+	alive   bool
+	pending map[int64]chan map[string]any
+}
+
+// New spawns pi with the given binary and args.
+func New(bin string, args ...string) (*Client, error) {
+	full := append([]string{"--mode", "rpc"}, args...)
+	cmd := exec.Command(bin, full...)
+	cmd.Env = os.Environ()
+	cmd.Stderr = os.Stderr
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("spawn pi: %w", err)
+	}
+
+	c := &Client{
+		cmd:     cmd,
+		stdin:   stdin,
+		events:  make(chan Event, 256),
+		done:    make(chan struct{}),
+		alive:   true,
+		pending: make(map[int64]chan map[string]any),
+	}
+	go c.readLoop(stdout)
+	return c, nil
+}
+
+func (c *Client) readLoop(r io.Reader) {
+	defer close(c.done)
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(line, &data); err != nil {
+			continue
+		}
+		typ, _ := data["type"].(string)
+
+		// command responses are correlated, not broadcast
+		if typ == "response" {
+			if id, ok := toInt64(data["id"]); ok {
+				c.mu.Lock()
+				ch := c.pending[id]
+				delete(c.pending, id)
+				c.mu.Unlock()
+				if ch != nil {
+					select {
+					case ch <- data:
+					default:
+					}
+				}
+			}
+			continue
+		}
+
+		raw := make(json.RawMessage, len(line))
+		copy(raw, line)
+		select {
+		case c.events <- Event{Type: typ, Raw: raw, Data: data}:
+		default:
+			// drop when consumer is stalled; never block the pi pipe
+		}
+	}
+	c.mu.Lock()
+	c.alive = false
+	for _, ch := range c.pending {
+		close(ch)
+	}
+	c.pending = make(map[int64]chan map[string]any)
+	c.mu.Unlock()
+}
+
+// Events returns the broadcast event channel.
+func (c *Client) Events() <-chan Event { return c.events }
+
+// Done closes when the pi process output ends.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
+// Alive reports whether the subprocess is still producing.
+func (c *Client) Alive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.alive
+}
+
+// SendUserMessage queues a user message and returns a response waiter.
+func (c *Client) SendUserMessage(text string) error {
+	return c.send(map[string]any{
+		"type":    "prompt",
+		"message": text,
+	})
+}
+
+// Abort interrupts the current turn.
+func (c *Client) Abort() error {
+	return c.send(map[string]any{"type": "abort"})
+}
+
+func (c *Client) send(command map[string]any) error {
+	id := c.nextID.Add(1)
+	command["id"] = id
+	data, err := json.Marshal(command)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if !c.alive {
+		c.mu.Unlock()
+		return fmt.Errorf("pi subprocess is not running")
+	}
+	c.mu.Unlock()
+	_, err = c.stdin.Write(append(data, '\n'))
+	return err
+}
+
+// Close terminates the subprocess.
+func (c *Client) Close() {
+	_ = c.stdin.Close()
+	if c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	}
+	return 0, false
+}

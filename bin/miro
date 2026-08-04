@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Miro Personal Agent — launcher
 #
-# Runs Miro's OWN white-labeled copy of the Pi Agent engine (patched via the
-# official piConfig hook: title, header and env prefix all say "miro").
-# Miro lives in its own home (~/.miro), fully isolated from any global pi
-# install — sessions, credentials, themes and extensions are separate.
+# Prefers the native Bubble Tea TUI (miro-tui). Falls back to the
+# white-labeled Pi Agent TUI if the Go binary is not built.
 set -euo pipefail
 
 MIRO_HOME="${MIRO_HOME:-$HOME/.miro}"
 CORE_BIN="$MIRO_HOME/core/node_modules/.bin/pi"
+TUI_BIN="$MIRO_HOME/bin/miro-tui"
 
 export MIRO_HOME
 export MIRO_CODING_AGENT_DIR="$MIRO_HOME/agent"
+export MIRO_CORE_BIN="$CORE_BIN"
 
 if [ ! -d "$MIRO_CODING_AGENT_DIR" ] || [ ! -x "$CORE_BIN" ]; then
   echo "Miro: installation incomplete." >&2
-  if [ ! -x "$CORE_BIN" ]; then
-    echo "  core engine missing: $CORE_BIN" >&2
-  fi
-  if [ ! -d "$MIRO_CODING_AGENT_DIR" ]; then
-    echo "  agent home missing: $MIRO_CODING_AGENT_DIR" >&2
-  fi
+  [ ! -x "$CORE_BIN" ] && echo "  core engine missing: $CORE_BIN" >&2
+  [ ! -d "$MIRO_CODING_AGENT_DIR" ] && echo "  agent home missing: $MIRO_CODING_AGENT_DIR" >&2
   echo "Run ./install.sh inside the miro-agent project." >&2
   exit 1
+fi
+
+if [ -x "$TUI_BIN" ]; then
+  exec "$TUI_BIN" "$@"
 fi
 
 exec "$CORE_BIN" "$@"
