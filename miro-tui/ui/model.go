@@ -22,6 +22,7 @@ const (
 	kindTool
 	kindThinking
 	kindInfo
+	kindBanner
 )
 
 type chatLine struct {
@@ -54,7 +55,18 @@ type Model struct {
 	err         error
 	cwd         string
 	sessionName string
+
+	// timestamp of the most recent Ctrl+C press (double-press-to-quit)
+	ctrlCAt time.Time
+
+	// cached, width-centered colored startup banner
+	banner      string
+	bannerWidth int
 }
+
+// A single Ctrl+C interrupts the current task; two presses within this
+// window exit the TUI.
+const ctrlCQuitWindow = 1200 * time.Millisecond
 
 // sessionPickerState renders the historical-session chooser.
 type sessionPickerState struct {
@@ -70,10 +82,10 @@ type switchResultMsg struct {
 	cancelled bool
 }
 
-// RPCMsg carries one pi RPC event into the bubbletea loop.
+// RPCMsg carries one engine RPC event into the bubbletea loop.
 type RPCMsg struct{ Evt rpc.Event }
 
-// ExitMsg signals that the pi subprocess has terminated.
+// ExitMsg signals that the engine subprocess has terminated.
 type ExitMsg struct{}
 
 // New creates the root model.
@@ -90,8 +102,11 @@ func New(client *rpc.Client) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	return Model{
-		client:   client,
-		lines:    []chatLine{{kind: kindInfo, text: "✦ Miro · Let Miro sort your mind"}},
+		client: client,
+		lines: []chatLine{
+			{kind: kindBanner, text: miroBanner},
+			{kind: kindInfo, text: "✦ Miro · Let Miro sort your mind"},
+		},
 		textarea: ta,
 		spinner:  sp,
 	}
@@ -111,11 +126,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 5 // header + single-line input + footer
-		if m.viewport.Height < 3 {
-			m.viewport.Height = 3
-		}
 
 	case tea.KeyMsg:
 		// session picker keys take top priority
@@ -135,9 +145,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				return m, m.selectSessionCmd()
-			case "esc", "ctrl+c":
+			case "esc":
 				m.picker.active = false
 				m.picker = nil
+				return m, nil
+			case "ctrl+c":
+				m.picker.active = false
+				m.picker = nil
+				m.ctrlCAt = time.Now() // count as the first press of a double-tap
 				return m, nil
 			default:
 				return m, nil // swallow other keys while picking
@@ -170,12 +185,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+d":
 			return m, tea.Quit
-		case "ctrl+c", "esc":
+		case "ctrl+c":
+			// one press interrupts the current task; two quick presses exit
+			now := time.Now()
+			if !m.ctrlCAt.IsZero() && now.Sub(m.ctrlCAt) < ctrlCQuitWindow {
+				return m, tea.Quit
+			}
+			m.ctrlCAt = now
+			if m.busy {
+				_ = m.client.Abort()
+				m.lines = append(m.lines, chatLine{kind: kindInfo, text: "■ interrupted · ⌃C 再按一次退出"})
+				m.busy = false
+			} else {
+				m.lines = append(m.lines, chatLine{kind: kindInfo, text: "⌃C 再按一次退出 · press ⌃C again to quit"})
+			}
+		case "esc":
 			if m.busy {
 				_ = m.client.Abort()
 				m.lines = append(m.lines, chatLine{kind: kindInfo, text: "■ interrupted"})
-			} else if msg.String() == "ctrl+c" {
-				return m, tea.Quit
+				m.busy = false
 			}
 		case "enter":
 			text := strings.TrimSpace(m.textarea.Value())
@@ -235,7 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleRPC(msg.Evt)
 
 	case ExitMsg:
-		m.err = fmt.Errorf("pi subprocess exited")
+		m.err = fmt.Errorf("engine subprocess exited")
 		m.busy = false
 		return m, tea.Quit
 
@@ -251,9 +279,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.menu.update(m.textarea.Value())
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
+	m.layout()
 	m.refreshViewport()
 
 	return m, tea.Batch(cmds...)
+}
+
+// layout sizes the textarea and message viewport from the current terminal
+// dimensions. The textarea must be sized explicitly: bubbles keeps its own
+// internal width (default 80) otherwise, which makes input wrap long before
+// the styled box edge.
+func (m *Model) layout() {
+	// textarea content width = box width (m.width-4) minus border(2) + padding(2)
+	w := m.width - 8
+	if w < 4 {
+		w = 4
+	}
+	m.textarea.SetWidth(w)
+
+	// auto-grow the input up to 8 lines as the text wraps, and shrink the
+	// message pane to match so nothing overlaps.
+	lines := wrappedLineCount(m.textarea.Value(), w)
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > 8 {
+		lines = 8
+	}
+	m.textarea.SetHeight(lines)
+
+	m.viewport.Width = m.width
+	h := m.height - 4 - lines // header(1) + footer(1) + input box
+	if h < 3 {
+		h = 3
+	}
+	m.viewport.Height = h
+}
+
+// wrappedLineCount counts how many screen rows `s` occupies when wrapped at
+// `width` runes per line, respecting explicit newlines.
+func wrappedLineCount(s string, width int) int {
+	if width < 1 {
+		width = 1
+	}
+	count := 0
+	for _, line := range strings.Split(s, "\n") {
+		n := len([]rune(line))
+		if n == 0 {
+			count++
+			continue
+		}
+		count += (n + width - 1) / width
+	}
+	return count
 }
 
 // selectSessionCmd switches to the picked session via the RPC protocol.
@@ -293,13 +371,21 @@ func (m *Model) selectSessionCmd() tea.Cmd {
 // Must run inside Update: View() has a value receiver, so mutations there
 // would be discarded.
 func (m *Model) refreshViewport() {
+	wrapWidth := m.width - 6
+	if wrapWidth < 10 {
+		wrapWidth = 10
+	}
 	var b strings.Builder
 	for _, l := range m.lines {
 		switch l.kind {
 		case kindUser:
-			b.WriteString(styleUserPrefix.Render("❯ ") + l.text)
+			wrapped := wrapText(l.text, wrapWidth)
+			b.WriteString(styleUserPrefix.Render("❯ ") + wrapped[0])
+			for _, w := range wrapped[1:] {
+				b.WriteString("\n  " + w)
+			}
 		case kindAssistant:
-			b.WriteString("  " + l.text)
+			b.WriteString("  " + strings.Join(wrapText(l.text, wrapWidth), "\n  "))
 		case kindTool:
 			badge := "◐"
 			if l.toolID != "" {
@@ -322,6 +408,8 @@ func (m *Model) refreshViewport() {
 			b.WriteString("  " + styleThinking.Render("▸ "+string(r)) + "\n")
 		case kindInfo:
 			b.WriteString(styleHeaderText.Render(l.text))
+		case kindBanner:
+			b.WriteString(m.bannerView() + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -330,6 +418,16 @@ func (m *Model) refreshViewport() {
 	}
 	m.viewport.SetContent(b.String())
 	m.viewport.GotoBottom()
+}
+
+// bannerView returns the colored startup banner, re-rendered only when the
+// terminal width changes (glyphs are colorized per-character, so it is cached).
+func (m *Model) bannerView() string {
+	if m.banner == "" || m.bannerWidth != m.width {
+		m.banner = renderBanner(m.width)
+		m.bannerWidth = m.width
+	}
+	return m.banner
 }
 
 func (m *Model) handleRPC(evt rpc.Event) {
@@ -393,7 +491,7 @@ func (m *Model) handleRPC(evt rpc.Event) {
 		}
 	case "extension_ui_request":
 		if method, _ := evt.Data["method"].(string); method == "notify" {
-			if text, ok := evt.Data["message"].(string); ok && text != "" {
+			if text, ok := evt.Data["message"].(string); ok && text != "" && !suppressStartupNoise(text) {
 				m.lines = append(m.lines, chatLine{kind: kindInfo, text: text})
 			}
 		}
@@ -402,6 +500,15 @@ func (m *Model) handleRPC(evt rpc.Event) {
 			m.err = fmt.Errorf("%s", msg)
 		}
 	}
+}
+
+// suppressStartupNoise hides low-value informational notifications that
+// third-party packages fire on every session start (the goal/loop package's
+// provider note and its conversation-load wait), keeping the Miro startup
+// screen clean. Informational only — the underlying behavior is unaffected.
+func suppressStartupNoise(text string) bool {
+	return strings.HasPrefix(text, "pi-goal-list-loop-audit: session provider") ||
+		strings.HasPrefix(text, "glla: pi has not loaded a conversation yet")
 }
 
 // replaceAssistant updates (or appends) the trailing assistant block.
@@ -481,7 +588,7 @@ func (m Model) View() string {
 		picker = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorAccent).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(strings.Join(items, "\n")) + "\n"
 	}
@@ -502,14 +609,14 @@ func (m Model) View() string {
 		menu = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(strings.Join(lines, "\n")) + "\n"
 	}
 
 	// input + footer
 	input := styleInputBox.Width(m.width - 4).Render(m.textarea.View())
-	footer := styleFooter.Render(fmt.Sprintf("⌃C interrupt   ⌃D quit   • Miro TUI v0.1.0"))
+	footer := styleFooter.Render(fmt.Sprintf("⌃C 中断 · 连按两次退出   ⌃D quit   • Miro TUI v%s", agentVersion()))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -519,6 +626,28 @@ func (m Model) View() string {
 		input,
 		footer,
 	)
+}
+
+// wrapText soft-wraps text to at most `width` runes per line, preserving
+// existing newlines. Rune-based so CJK text wraps correctly.
+func wrapText(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		r := []rune(line)
+		for len(r) > width {
+			out = append(out, string(r[:width]))
+			r = r[width:]
+		}
+		out = append(out, string(r))
+	}
+	return out
 }
 
 // extractText joins all text blocks of a message's content.
@@ -579,4 +708,3 @@ func extractThinking(msg map[string]any) string {
 	}
 	return strings.Join(parts, "\n")
 }
-

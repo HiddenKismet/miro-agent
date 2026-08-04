@@ -2,11 +2,11 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
-// OpenCode-inspired palette
+// Miro palette — warm pine + mint, matching miro-dark.json / Miro Web dark.
 var (
-	colorBG     = lipgloss.Color("#0a0a0a")
-	colorPanel  = lipgloss.Color("#1e1e1e")
-	colorBorder = lipgloss.Color("#333333")
+	colorBG     = lipgloss.Color("#0e1612") // pine ink
+	colorPanel  = lipgloss.Color("#15201b") // deep pine
+	colorBorder = lipgloss.Color("#2a352f")
 	colorAccent = lipgloss.Color("#5fbfa4")
 	colorOrange = lipgloss.Color("#f5a742")
 	colorGreen  = lipgloss.Color("#7fbf8e")
@@ -31,7 +31,7 @@ var (
 	styleToolName   = lipgloss.NewStyle().Foreground(colorMuted)
 	styleThinking   = lipgloss.NewStyle().Foreground(colorDim).Italic(true)
 
-	styleFooter  = lipgloss.NewStyle().Foreground(colorDim).PaddingLeft(1)
+	styleFooter   = lipgloss.NewStyle().Foreground(colorDim).PaddingLeft(1)
 	styleInputBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).

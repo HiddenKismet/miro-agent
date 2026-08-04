@@ -35,6 +35,9 @@ command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
 
 mkdir -p "$AGENT_DIR/extensions" "$BIN_DIR"
 
+# --- version stamp (single source of truth: VERSION in the repo root) --------
+[ -f "$REPO_DIR/VERSION" ] && cp "$REPO_DIR/VERSION" "$AGENT_DIR/VERSION" || true
+
 # --- first install: copy the whole template ----------------------------------
 if [ ! -f "$AGENT_DIR/.miro-installed" ]; then
   cp -R "$TEMPLATE/." "$AGENT_DIR/"
@@ -47,6 +50,7 @@ fi
 # --- refresh built-in components (always, so re-runs upgrade them) ------------
 rm -rf "$AGENT_DIR/extensions/miro-web"
 cp -R "$TEMPLATE/extensions/miro-web" "$AGENT_DIR/extensions/miro-web"
+rm -rf "$AGENT_DIR/extensions/miro-web/.pi-glla"   # runtime goal state — never ship it
 cp "$TEMPLATE/extensions/auto-task-resume.ts" "$AGENT_DIR/extensions/auto-task-resume.ts"
 cp "$TEMPLATE/extensions/miro-brand.ts" "$AGENT_DIR/extensions/miro-brand.ts"
 mkdir -p "$AGENT_DIR/themes"

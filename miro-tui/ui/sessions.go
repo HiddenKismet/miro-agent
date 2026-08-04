@@ -31,6 +31,28 @@ func sessionRoot() string {
 	return filepath.Join(dir, "sessions")
 }
 
+// agentVersion reads the Miro version stamp from the agent home (VERSION),
+// falling back to a default when absent.
+func agentVersion() string {
+	dir := os.Getenv("MIRO_CODING_AGENT_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "0.1.0"
+		}
+		dir = filepath.Join(home, ".miro", "agent")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "VERSION"))
+	if err != nil {
+		return "0.1.0"
+	}
+	v := strings.TrimSpace(string(b))
+	if v == "" {
+		return "0.1.0"
+	}
+	return v
+}
+
 // ListSessions scans the session store: one newest file per session dir,
 // newest first. Name comes from session_info.name (fallback: cwd base),
 // preview from the first user message.
@@ -75,7 +97,7 @@ func ListSessions() []Session {
 }
 
 // parseSessionFile reads enough of the JSONL to find the session name and
-// the first user message text. The file is a pi session log:
+// the first user message text. The file is an engine session log:
 //
 //	{"type":"session","id":...,"cwd":"/path"}            ← header (first line)
 //	{"type":"session_info","name":"my session"}          ← optional rename
@@ -152,4 +174,3 @@ func textFromContent(content any) string {
 	}
 	return ""
 }
-

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Miro Personal Agent — Let Miro sort your mind." />
+  <meta name="description" content="Miro Personal Agent - Let Miro sort your mind." />
   <title>Miro</title>
   <link rel="stylesheet" href="/vendor/hljs-theme.css" id="hljs-theme" />
   <link rel="stylesheet" href="/style.css?v=3" />
@@ -60,7 +60,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
         </button>
         <div class="topbar-session">
-          <span id="session-name" class="session-name" title="点击重命名 / Click to rename" data-i18n-title="renameSession">—</span>
+          <span id="session-name" class="session-name" title="点击重命名 / Click to rename" data-i18n-title="renameSession">-</span>
         </div>
         <div class="topbar-right">
           <span id="queued-badge" class="badge" hidden></span>
@@ -118,7 +118,7 @@
             data-i18n-placeholder="inputPlaceholder"
           ></textarea>
         </div>
-        <div class="composer-hint" data-i18n="hint">Enter 发送 · Shift+Enter 换行 · Esc 停止 · Ctrl+K 命令面板</div>
+        <div class="composer-hint" data-i18n="hint">Enter 发送 · Shift+Enter 换行&#10;Esc 停止 · Ctrl+K 命令面板</div>
       </div>
     </main>
   </div>
@@ -192,6 +192,10 @@
   <div id="toast-root"></div>
   <input type="file" id="file-input" accept="image/*" multiple hidden />
 
+  <script>
+    // The server injects the real access token here; app.js sends it on /api/*.
+    window.__MIRO_WEB_TOKEN__ = "__MIRO_TOKEN_VALUE__";
+  </script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/highlight.min.js"></script>
   <script src="/app.js?v=3"></script>

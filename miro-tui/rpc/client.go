@@ -1,4 +1,5 @@
-// Package rpc drives a pi --mode rpc subprocess with JSONL commands/events.
+// Package rpc drives the Miro engine (a pi --mode rpc subprocess) with
+// JSONL commands/events.
 package rpc
 
 import (
@@ -13,14 +14,14 @@ import (
 	"time"
 )
 
-// Event is one JSONL line from pi stdout.
+// Event is one JSONL line from the engine stdout.
 type Event struct {
 	Type string
 	Raw  json.RawMessage
 	Data map[string]any
 }
 
-// Client manages the pi subprocess.
+// Client manages the engine subprocess.
 type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -33,7 +34,7 @@ type Client struct {
 	pending map[int64]chan map[string]any
 }
 
-// New spawns pi with the given binary and args.
+// New spawns the engine with the given binary and args.
 func New(bin string, args ...string) (*Client, error) {
 	full := append([]string{"--mode", "rpc"}, args...)
 	cmd := exec.Command(bin, full...)
@@ -49,7 +50,7 @@ func New(bin string, args ...string) (*Client, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("spawn pi: %w", err)
+		return nil, fmt.Errorf("spawn engine: %w", err)
 	}
 
 	c := &Client{
@@ -101,7 +102,7 @@ func (c *Client) readLoop(r io.Reader) {
 		select {
 		case c.events <- Event{Type: typ, Raw: raw, Data: data}:
 		default:
-			// drop when consumer is stalled; never block the pi pipe
+			// drop when consumer is stalled; never block the engine pipe
 		}
 	}
 	c.mu.Lock()
@@ -116,7 +117,7 @@ func (c *Client) readLoop(r io.Reader) {
 // Events returns the broadcast event channel.
 func (c *Client) Events() <-chan Event { return c.events }
 
-// Done closes when the pi process output ends.
+// Done closes when the engine process output ends.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
 // Alive reports whether the subprocess is still producing.
@@ -146,7 +147,7 @@ func (c *Client) Call(command map[string]any) (map[string]any, error) {
 	c.mu.Lock()
 	if !c.alive {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("pi subprocess is not running")
+		return nil, fmt.Errorf("engine subprocess is not running")
 	}
 	ch := make(chan map[string]any, 1)
 	c.pending[id] = ch
@@ -163,7 +164,7 @@ func (c *Client) Call(command map[string]any) (map[string]any, error) {
 	case resp := <-ch:
 		return resp, nil
 	case <-c.done:
-		return nil, fmt.Errorf("pi subprocess exited")
+		return nil, fmt.Errorf("engine subprocess exited")
 	}
 }
 
@@ -178,7 +179,7 @@ func (c *Client) CallTimeout(command map[string]any, timeout time.Duration) (map
 	c.mu.Lock()
 	if !c.alive {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("pi subprocess is not running")
+		return nil, fmt.Errorf("engine subprocess is not running")
 	}
 	ch := make(chan map[string]any, 1)
 	c.pending[id] = ch
@@ -197,7 +198,7 @@ func (c *Client) CallTimeout(command map[string]any, timeout time.Duration) (map
 	case resp := <-ch:
 		return resp, nil
 	case <-c.done:
-		return nil, fmt.Errorf("pi subprocess exited")
+		return nil, fmt.Errorf("engine subprocess exited")
 	case <-timer.C:
 		c.mu.Lock()
 		delete(c.pending, id)
@@ -221,7 +222,7 @@ func (c *Client) send(command map[string]any) error {
 	c.mu.Lock()
 	if !c.alive {
 		c.mu.Unlock()
-		return fmt.Errorf("pi subprocess is not running")
+		return fmt.Errorf("engine subprocess is not running")
 	}
 	c.mu.Unlock()
 	_, err = c.stdin.Write(append(data, '\n'))

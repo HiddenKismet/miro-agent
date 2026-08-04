@@ -22,7 +22,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat, writeFile, rename } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve, basename, extname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -35,8 +35,15 @@ const HOME = os.homedir();
 const MIRO_HOME = process.env.MIRO_HOME || join(HOME, ".miro");
 const AGENT_DIR = process.env.MIRO_CODING_AGENT_DIR || join(MIRO_HOME, "agent");
 const AUTH_FILE = join(AGENT_DIR, "auth.json");
-// bump to invalidate browser caches for /app.js and /style.css
-const ASSET_VERSION = "4";
+// Cache-bust version for /app.js and /style.css: derived from the stylesheet
+// mtime so edits are picked up automatically without a manual bump.
+const ASSET_VERSION = (() => {
+  try {
+    return String(Math.round(statSync(join(PUBLIC_DIR, "style.css")).mtimeMs));
+  } catch {
+    return Date.now();
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -61,6 +68,7 @@ const args = {
   cwd: process.cwd(),
   open: false,
   noSession: false,
+  token: undefined,
 };
 
 {
@@ -76,6 +84,7 @@ const args = {
       case "--model": args.model = take(i++); break;
       case "--name": case "-n": args.name = take(i++); break;
       case "--session-dir": args.sessionDir = take(i++); break;
+      case "--token": args.token = take(i++); break;
       case "--cwd": args.cwd = take(i++); break;
       case "--open": args.open = true; break;
       case "--no-session": args.noSession = true; break;
@@ -96,6 +105,8 @@ Options:
   --cwd <path>        Working directory for the agent
   --open              Open the browser automatically
   --no-session        Ephemeral mode (do not persist sessions)
+  --token <t>         Access token required by /api/* (default: auto-generated;
+                      also honored via $MIRO_WEB_TOKEN)
   -h, --help          Show this help`);
         process.exit(0);
       default:
@@ -103,6 +114,12 @@ Options:
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Access token (--token / $MIRO_WEB_TOKEN, else auto-generated)
+// ---------------------------------------------------------------------------
+
+const WEB_TOKEN = (args.token || process.env.MIRO_WEB_TOKEN || "").trim() || crypto.randomBytes(24).toString("hex");
 
 // ---------------------------------------------------------------------------
 // Spawn pi in RPC mode
@@ -380,7 +397,7 @@ async function handleGetAuth(res) {
     keyPreview: maskKey(cfg?.key),
   }));
   providers.sort((a, b) => a.name.localeCompare(b.name));
-  sendJSON(res, 200, { providers, authFile: AUTH_FILE });
+  sendJSON(res, 200, { providers });
 }
 
 async function handlePutAuth(req, res) {
@@ -460,6 +477,15 @@ function sendJSON(res, status, data) {
     "Cache-Control": "no-store",
   });
   res.end(body);
+}
+
+// /api/* routes require a token: via the `Authorization: Bearer <token>`
+// header, or a `?token=` query parameter (EventSource and <a download>
+// cannot set headers).
+function checkToken(req, url) {
+  const auth = req.headers.authorization || "";
+  const q = url?.searchParams?.get("token") || "";
+  return auth === `Bearer ${WEB_TOKEN}` || q === WEB_TOKEN;
 }
 
 function serveFile(res, file, cache = "no-store") {
@@ -542,6 +568,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
 
+  // protect all /api/* routes except health (the frontend sends the token)
+  if (path.startsWith("/api/") && path !== "/api/health") {
+    if (!checkToken(req, url)) return sendJSON(res, 401, { error: "unauthorized" });
+  }
+
   if (req.method === "POST" && path === "/api/command") return handleCommand(req, res);
 
   if (req.method === "GET" && path === "/api/events") {
@@ -616,12 +647,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (path === "/" || path === "/index.html") {
-    // inject the current cache-bust version into asset URLs
+    // inject the cache-bust version and the access token into the page
     try {
       let html = await readFile(join(PUBLIC_DIR, "index.html"), "utf8");
       html = html
         .replace(/\/style\.css\?v=\d+/, `/style.css?v=${ASSET_VERSION}`)
-        .replace(/\/app\.js\?v=\d+/, `/app.js?v=${ASSET_VERSION}`);
+        .replace(/\/app\.js\?v=\d+/, `/app.js?v=${ASSET_VERSION}`)
+        .replace(/__MIRO_TOKEN_VALUE__/g, WEB_TOKEN);
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
@@ -670,6 +702,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(args.port, args.host, () => {
   const url = `http://${args.host === "0.0.0.0" ? "localhost" : args.host}:${args.port}`;
   console.log(`[miro-web] serving at ${url}`);
+  if (args.host !== "127.0.0.1" && args.host !== "localhost") {
+    console.log(`[miro-web] access token (Authorization: Bearer or ?token=): ${WEB_TOKEN}`);
+  }
   if (args.open) openBrowser(url);
 });
 

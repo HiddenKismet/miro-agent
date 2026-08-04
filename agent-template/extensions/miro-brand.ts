@@ -12,13 +12,28 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WEB_SERVER = join(here, "miro-web", "server.mjs");
-const MIRO_VERSION = "0.1.0";
+
+// Version is stamped by install.sh into the agent home (VERSION); fall back to
+// the value kept in sync at build time.
+function resolveVersion(): string {
+  try {
+    const agentDir = process.env.MIRO_CODING_AGENT_DIR || join(process.env.MIRO_HOME || join(os.homedir(), ".miro"), "agent");
+    const v = readFileSync(join(agentDir, "VERSION"), "utf8").trim();
+    if (v) return v;
+  } catch {
+    /* no VERSION stamp yet */
+  }
+  return "0.1.0";
+}
+const MIRO_VERSION = resolveVersion();
 
 export default function (pi: ExtensionAPI) {
   let fired = false;
@@ -27,8 +42,8 @@ export default function (pi: ExtensionAPI) {
     if (fired) return;
     fired = true;
 
-    // ---- brand greeting -------------------------------------------------------
-    ctx.ui.notify("Miro ✦ Let Miro sort your mind", "info");
+    // The TUI renders its own banner + greeting, so no notify here (avoids a
+    // duplicated "Miro … sort your mind" line at startup).
     ctx.ui.setTitle("Miro ✦ Personal Agent");
 
     // ---- mint pulse working indicator ------------------------------------------

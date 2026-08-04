@@ -25,7 +25,7 @@ const I18N = {
     send: "发送",
     attach: "附加图片",
     inputPlaceholder: "给 Miro 发送消息…  输入 / 打开命令面板",
-    hint: "Enter 发送 · Shift+Enter 换行 · Esc 停止 · Ctrl+K 命令面板",
+    hint: "Enter 发送 · Shift+Enter 换行\nEsc 停止 · Ctrl+K 命令面板",
     renameSession: "点击重命名会话",
     thinking: "思考",
     running: "运行中…",
@@ -36,7 +36,7 @@ const I18N = {
     yes: "是",
     no: "否",
     welcomeTitle: "Miro",
-    welcomeSub: "让 Miro 梳理你的思绪——捕捉碎片、推演思考、落地成事",
+    welcomeSub: "让 Miro 梳理你的思绪：捕捉碎片、推演思考、落地成事",
     settings: "设置",
     appearance: "外观",
     theme: "主题",
@@ -45,7 +45,7 @@ const I18N = {
     themeSystem: "跟随系统",
     language: "语言",
     credentials: "凭据",
-    credentialsNote: "等价于 /login —— API key 保存到 ~/.miro/agent/auth.json。OAuth 登录请使用终端里的 /login。",
+    credentialsNote: "等价于 /login：API key 保存到 ~/.miro/agent/auth.json。OAuth 登录请使用终端里的 /login。",
     provider: "provider",
     apiKey: "API key (sk-…)",
     save: "保存",
@@ -61,7 +61,7 @@ const I18N = {
     context: "上下文",
     messages: "消息",
     commands: "命令",
-    paletteHint: "选择命令执行 — ↑↓ 导航 · Enter 执行 · Esc 关闭",
+    paletteHint: "选择命令执行：↑↓ 导航 / Enter 执行 / Esc 关闭",
     queued: "排队中",
     retrying: "自动重试中",
     compacting: "正在压缩上下文…",
@@ -101,7 +101,7 @@ const I18N = {
     send: "Send",
     attach: "Attach image",
     inputPlaceholder: "Message Miro…  type / for commands",
-    hint: "Enter to send · Shift+Enter newline · Esc to stop · Ctrl+K commands",
+    hint: "Enter to send · Shift+Enter newline\nEsc to stop · Ctrl+K commands",
     renameSession: "Click to rename session",
     thinking: "Thinking",
     running: "Running…",
@@ -121,7 +121,7 @@ const I18N = {
     themeSystem: "System",
     language: "Language",
     credentials: "Credentials",
-    credentialsNote: "Like /login — API keys are stored in ~/.miro/agent/auth.json. For OAuth, use /login in the terminal.",
+    credentialsNote: "Like /login: API keys are stored in ~/.miro/agent/auth.json. For OAuth, use /login in the terminal.",
     provider: "provider",
     apiKey: "API key (sk-…)",
     save: "Save",
@@ -137,7 +137,7 @@ const I18N = {
     context: "Context",
     messages: "Messages",
     commands: "Commands",
-    paletteHint: "Pick a command — ↑↓ navigate · Enter run · Esc close",
+    paletteHint: "Pick a command: ↑↓ navigate / Enter run / Esc close",
     queued: "queued",
     retrying: "Auto-retrying",
     compacting: "Compacting context…",
@@ -279,13 +279,25 @@ function syncThemeSeg() {
 
 let cmdSeq = 0;
 
+const WEB_TOKEN = window.__MIRO_WEB_TOKEN__ || "";
+function apiHeaders(extra = {}) {
+  return WEB_TOKEN ? { ...extra, Authorization: `Bearer ${WEB_TOKEN}` } : extra;
+}
+
 function send(cmd) {
   cmd.id = `w${++cmdSeq}`;
   return fetch("/api/command", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(cmd),
-  }).then((r) => r.json());
+  }).then(async (r) => {
+    // token rotated (server restarted) — reload to pick up the new one
+    if (r.status === 401) {
+      location.reload();
+      return { success: false };
+    }
+    return r.json();
+  });
 }
 
 function sendNoWait(cmd) {
@@ -295,7 +307,7 @@ function sendNoWait(cmd) {
 let es = null;
 
 function openEventStream() {
-  es = new EventSource("/api/events");
+  es = new EventSource(WEB_TOKEN ? `/api/events?token=${encodeURIComponent(WEB_TOKEN)}` : "/api/events");
   es.onopen = () => {
     connDot.className = "conn-dot conn-on";
     connText.textContent = t("connected");
@@ -353,7 +365,7 @@ function applyState(s) {
   state.streaming = !!s.isStreaming;
   state.autoCompaction = s.autoCompactionEnabled ?? state.autoCompaction;
 
-  sessionNameEl.textContent = state.sessionName || "—";
+  sessionNameEl.textContent = state.sessionName || "-";
   $("auto-compaction").checked = !!state.autoCompaction;
   updateStreamingIndicator();
   highlightActiveSession();
@@ -365,15 +377,15 @@ async function refreshStats() {
     if (resp.success && resp.data) {
       const d = resp.data;
       const cu = d.contextUsage;
-      const tokens = d.tokens?.total != null ? fmtTokens(d.tokens.total) : "—";
+      const tokens = d.tokens?.total != null ? fmtTokens(d.tokens.total) : "-";
       const win = cu?.contextWindow ? fmtTokens(cu.contextWindow) : "";
       const pct = cu?.percent != null ? ` (${Math.round(cu.percent)}%)` : "";
       ctxUsageEl.textContent = win ? `${tokens} / ${win}${pct}` : `${tokens}${pct}`;
-      const cost = d.cost != null ? `$${d.cost.toFixed(4)}` : "—";
+      const cost = d.cost != null ? `$${d.cost.toFixed(4)}` : "-";
       renderSessionStats({
         tokens,
         cost,
-        context: cu ? `${fmtTokens(cu.tokens ?? 0)} / ${win}${pct}` : "—",
+        context: cu ? `${fmtTokens(cu.tokens ?? 0)} / ${win}${pct}` : "-",
         messages: String(d.totalMessages ?? 0),
         sessionFile: d.sessionFile ?? "",
       });
@@ -477,7 +489,7 @@ async function loadCommands() {
 async function refreshSessions() {
   let sessions = [];
   try {
-    const resp = await fetch("/api/sessions");
+    const resp = await fetch("/api/sessions", { headers: apiHeaders() });
     const data = await resp.json();
     sessions = data.sessions ?? [];
   } catch { /* ignore */ }
@@ -487,7 +499,7 @@ async function refreshSessions() {
   for (const s of sessions) {
     const item = el("div", "session-item");
     const title = el("div", "s-title");
-    title.textContent = s.name || s.preview || s.basename || "—";
+    title.textContent = s.name || s.preview || s.basename || "-";
     const preview = el("div", "s-preview");
     preview.textContent = s.name ? s.preview : "";
     const meta = el("div", "s-meta");
@@ -1201,6 +1213,15 @@ function onToolEnd(evt) {
 
 /* ---------- extension UI requests ---------- */
 
+// hide low-value startup notices from the goal/loop package so the welcome
+// screen stays clean (informational only, nothing the user must act on).
+function isNoiseNotify(text) {
+  return (
+    text.startsWith("pi-goal-list-loop-audit: session provider") ||
+    text.startsWith("glla: pi has not loaded a conversation yet")
+  );
+}
+
 function handleUiRequest(req) {
   const { id, method } = req;
   const respond = (payload) => sendNoWait({ type: "extension_ui_response", id, ...payload });
@@ -1270,7 +1291,9 @@ function handleUiRequest(req) {
       break;
     }
     case "notify":
-      showToast(req.message ?? "", req.notifyType ?? "info");
+      if (!isNoiseNotify(req.message ?? "")) {
+        showToast(req.message, req.notifyType ?? "info");
+      }
       break;
     case "setStatus":
     case "setWidget":
@@ -1570,7 +1593,9 @@ async function exportSession() {
     return;
   }
   const a = document.createElement("a");
-  a.href = "/api/file?path=" + encodeURIComponent(resp.data.path);
+  a.href =
+    "/api/file?path=" + encodeURIComponent(resp.data.path) +
+    (WEB_TOKEN ? "&token=" + encodeURIComponent(WEB_TOKEN) : "");
   a.download = "";
   document.body.appendChild(a);
   a.click();
@@ -1656,7 +1681,7 @@ async function showTree() {
   for (const root of roots) renderNode(root, 0);
 
   showModal({
-    title: `${t("treeTitle")} — ${t("treeHint")}`,
+    title: `${t("treeTitle")} - ${t("treeHint")}`,
     body,
     actions: [{ label: t("cancel") }],
   });
@@ -1685,7 +1710,7 @@ async function renameSession(arg) {
           const name = inp.value.trim();
           sendNoWait({ type: "set_session_name", name });
           state.sessionName = name || null;
-          sessionNameEl.textContent = name || "—";
+          sessionNameEl.textContent = name || "-";
           refreshSessions();
         },
       },
@@ -1744,7 +1769,7 @@ function renderCmdMenu() {
   let items;
   if (m.mode === "sessions") {
     items = state.sessions.map((s) => ({
-      name: s.name || s.preview || s.basename || "—",
+      name: s.name || s.preview || s.basename || "-",
       desc: s.cwd,
       kind: "",
       run: () => switchSession(s.file),
@@ -1824,7 +1849,7 @@ function syncLangSeg() {
 async function loadAuth() {
   const listEl = $("cred-list");
   try {
-    const resp = await fetch("/api/auth");
+    const resp = await fetch("/api/auth", { headers: apiHeaders() });
     const data = await resp.json();
     const providers = data.providers ?? [];
     listEl.innerHTML = "";
@@ -1844,7 +1869,7 @@ async function loadAuth() {
       del.textContent = "✕";
       del.title = t("delete");
       del.addEventListener("click", async () => {
-        const r = await fetch(`/api/auth?provider=${encodeURIComponent(p.name)}`, { method: "DELETE" });
+        const r = await fetch(`/api/auth?provider=${encodeURIComponent(p.name)}`, { method: "DELETE", headers: apiHeaders() });
         const d = await r.json();
         if (d.ok) showToast(t("deletedCredential"), "info");
         else showToast(d.error || "delete failed", "error");
@@ -1868,7 +1893,7 @@ async function saveCredential() {
   try {
     const resp = await fetch("/api/auth", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ provider, key }),
     });
     const data = await resp.json();
@@ -1991,7 +2016,7 @@ function init() {
   $("btn-restart").addEventListener("click", async () => {
     showToast(t("restarting"), "info");
     try {
-      const r = await fetch("/api/restart", { method: "POST" });
+      const r = await fetch("/api/restart", { method: "POST", headers: apiHeaders() });
       const d = await r.json();
       if (d.ok) showToast(t("restarted"), "info");
     } catch (e) {

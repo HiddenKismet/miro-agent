@@ -41,7 +41,7 @@ func main() {
 
 	p := tea.NewProgram(ui.New(client), tea.WithAltScreen())
 
-	// bridge pi RPC events into the bubbletea loop
+	// bridge engine RPC events into the bubbletea loop
 	go func() {
 		for evt := range client.Events() {
 			p.Send(ui.RPCMsg{Evt: evt})
