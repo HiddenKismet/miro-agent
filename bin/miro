@@ -6,7 +6,7 @@
 set -euo pipefail
 
 MIRO_HOME="${MIRO_HOME:-$HOME/.miro}"
-CORE_BIN="$MIRO_HOME/core/node_modules/.bin/pi"
+CORE_BIN="$MIRO_HOME/core/packages/coding-agent/dist/cli.js"
 TUI_BIN="$MIRO_HOME/bin/miro-tui"
 
 export MIRO_HOME
@@ -29,4 +29,5 @@ if [ -x "$TUI_BIN" ]; then
   exec "$TUI_BIN" "$@"
 fi
 
-exec "$CORE_BIN" "$@"
+# Fallback to the core engine directly (JS entry, run via node).
+exec node "$CORE_BIN" "$@"

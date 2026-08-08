@@ -46,17 +46,19 @@ Miro 是基于 [Pi Agent](https://github.com/earendil-works/pi) 二次定制开�
 
 ## 架构
 
-Miro 不是扩展集合，而是自带一份**白标化的 Pi Agent 引擎**：
+Miro 自带一份**自维护的 Pi Agent fork**（`core/`，独立 git 仓库，保留上游 remote 定期同步）。白标（name=miro, configDir=.miro）直接内建于 fork 的 `piConfig`，不再需要安装时打补丁：
 
 ```
 ~/.miro/
 ├── bin/miro          # 启动器
-├── core/             # 本地 Pi Agent 引擎副本（经官方 piConfig 白标）
+├── core/             # 本地 Pi fork（从仓库 core/ 构建，npm run build:offline）
 └── agent/            # Miro 家目录（会话、凭据、主题、扩展）
     ├── AGENTS.md     # Miro 身份与行为准则
-    ├── extensions/   # miro-web、miro-brand、auto-task-resume、miro-git、miro-task
+    ├── plugins/      # 声明式插件（commands / agents / skills）
     └── themes/       # miro-dark / miro-light / miro-opencode
 ```
+
+> **开发说明**：`core/` 是 Pi monorepo 的 fork（分支 `miro/dev`），改动请在其内部提交；`install.sh` 会把它复制到 `~/.miro/core` 并离线构建。首次安装需要联网（npm 依赖 + 模型数据）。
 
 ## 安装
 

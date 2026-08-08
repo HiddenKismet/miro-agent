@@ -3,8 +3,9 @@
 #
 # Installs Miro into ~/.miro/:
 #   ~/.miro/bin/miro            launcher
-#   ~/.miro/agent/              agent home (built-in extensions + settings)
-#   ~/.miro/agent/extensions/   miro-web, auto-task-resume, miro-brand, miro-git, miro-task
+#   ~/.miro/core/               local Pi fork (built from repo core/, white-labeled)
+#   ~/.miro/agent/              agent home (settings, skills, plugins, themes)
+#   ~/.miro/agent/plugins/      declarative plugins (commands / skills)
 #
 # Usage:
 #   ./install.sh [--home ~/.miro]
@@ -33,7 +34,7 @@ echo "  home: $MIRO_HOME"
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
 
-mkdir -p "$AGENT_DIR/extensions" "$BIN_DIR"
+mkdir -p "$AGENT_DIR" "$BIN_DIR"
 
 # --- version stamp (single source of truth: VERSION in the repo root) --------
 [ -f "$REPO_DIR/VERSION" ] && cp "$REPO_DIR/VERSION" "$AGENT_DIR/VERSION" || true
@@ -47,18 +48,10 @@ else
   echo "  ✓ existing Miro home found — refreshing built-in components"
 fi
 
-# --- refresh built-in components (always, so re-runs upgrade them) ------------
-rm -rf "$AGENT_DIR/extensions/miro-web"
-cp -R "$TEMPLATE/extensions/miro-web" "$AGENT_DIR/extensions/miro-web"
-rm -rf "$AGENT_DIR/extensions/miro-web/.pi-glla"   # runtime goal state — never ship it
-cp "$TEMPLATE/extensions/miro-git.ts" "$AGENT_DIR/extensions/miro-git.ts"
-cp "$TEMPLATE/extensions/miro-task.ts" "$AGENT_DIR/extensions/miro-task.ts"
-cp "$TEMPLATE/extensions/miro-mcp.ts" "$AGENT_DIR/extensions/miro-mcp.ts"
-cp "$TEMPLATE/extensions/miro-sandbox.ts" "$AGENT_DIR/extensions/miro-sandbox.ts"
-cp "$TEMPLATE/extensions/miro-pr.ts" "$AGENT_DIR/extensions/miro-pr.ts"
-mkdir -p "$AGENT_DIR/themes"
+# --- refresh themes + plugins dir (always, so re-runs upgrade them) ------------
+mkdir -p "$AGENT_DIR/themes" "$AGENT_DIR/plugins"
 cp "$TEMPLATE"/themes/*.json "$AGENT_DIR/themes/" 2>/dev/null || true
-echo "  ✓ miro-web, auto-task-resume, miro-brand, miro-git, miro-task, miro-mcp, miro-sandbox, miro-pr, themes"
+echo "  ✓ themes + plugins dir"
 
 # --- merge built-in packages into settings.json (preserves user settings) -----
 node - "$AGENT_DIR/settings.json" "npm:pi-subagents" "npm:@mjasnikovs/pi-task" "npm:pi-goal-list-loop-audit" <<'EOF'
@@ -74,15 +67,6 @@ fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
 EOF
 echo "  ✓ settings.json packages: subagents, pi-task, glla (goal)"
 
-# --- web UI frontend deps ------------------------------------------------------
-(cd "$AGENT_DIR/extensions/miro-web" && npm install --silent)
-echo "  ✓ miro-web dependencies"
-
-# --- MCP SDK (for the miro-mcp extension) --------------------------------------
-echo "  ⏳ installing MCP SDK (@modelcontextprotocol/client)..."
-(cd "$AGENT_DIR" && npm install --no-audit --no-fund @modelcontextprotocol/client --silent)
-echo "  ✓ MCP SDK"
-
 # --- Browser automation (playwright-cli + skill) --------------------------------
 echo "  ⏳ installing Playwright CLI (@playwright/cli)..."
 npm install -g --no-audit --no-fund @playwright/cli playwright >/dev/null 2>&1 || npm install -g @playwright/cli playwright
@@ -94,39 +78,63 @@ echo "  ⏳ downloading Chromium (~120MB)..."
 playwright install chromium >/dev/null 2>&1 || echo "  ⚠ chromium download failed (retry: playwright install chromium)"
 echo "  ⚠ if browser launch fails with missing libs, run once (sudo): playwright install-deps chromium"
 
-# --- Miro core: local white-labeled Pi Agent engine ---------------------------
-# A private copy of @earendil-works/pi-coding-agent, patched via its official
-# piConfig white-label hook so the TUI shows "miro" (title, header, env prefix)
-# instead of "pi". Global pi stays untouched.
+# --- Miro core: local Pi fork (white-labeled, built from source) ----------------
+# The core is a private fork of the Pi coding-agent monorepo, kept in core/ of
+# this repository. It is installed into $MIRO_HOME/core and built locally.
+# The white-label (name: miro, configDir: .miro) is baked into the fork's
+# package.json (piConfig), so no runtime patching is needed. Global pi stays
+# untouched.
 CORE_DIR="$MIRO_HOME/core"
-CORE_BIN="$CORE_DIR/node_modules/.bin/pi"
-CORE_PKG_JSON="$CORE_DIR/package.json"
-CORE_PI_PKG="$CORE_DIR/node_modules/@earendil-works/pi-coding-agent/package.json"
+CORE_BIN="$CORE_DIR/packages/coding-agent/dist/cli.js"
+CORE_FORK="$REPO_DIR/core"
 
-if [ ! -x "$CORE_BIN" ]; then
-  echo "  ⏳ installing Miro core (Pi Agent engine, ~160MB)..."
+# The fork lives in core/ as an independent git repo (gitignored). If it is
+# missing (e.g. fresh clone), fetch it from GitHub and pin the miro/dev branch.
+if [ ! -d "$CORE_FORK/.git" ]; then
+  echo "  ⏳ fetching Miro core fork (earendil-works/pi, branch miro/dev)..."
+  git clone --branch miro/dev https://github.com/earendil-works/pi.git "$CORE_FORK" 2>&1 | tail -2
+fi
+
+install_core_sources() {
   mkdir -p "$CORE_DIR"
-  [ -f "$CORE_PKG_JSON" ] || printf '{\n  "name": "miro-core",\n  "private": true\n}\n' > "$CORE_PKG_JSON"
-  (cd "$CORE_DIR" && npm install --no-audit --no-fund --silent @earendil-works/pi-coding-agent)
-  echo "  ✓ Miro core installed"
+  # Copy the fork sources (no node_modules / .git / dist) into the Miro home.
+  ( cd "$CORE_FORK" && tar --exclude=node_modules --exclude=.git --exclude=dist -cf - . ) | ( cd "$CORE_DIR" && tar -xf - )
+  if [ ! -d "$CORE_DIR/node_modules" ]; then
+    echo "  ⏳ installing Miro core dependencies (first run, a few minutes)..."
+    (cd "$CORE_DIR" && npm ci --no-audit --no-fund --silent)
+  fi
+}
+
+if [ ! -f "$CORE_DIR/package.json" ]; then
+  echo "  ⏳ installing Miro core (local Pi fork)..."
+  install_core_sources
+else
+  # Refresh fork sources on re-run (keeps node_modules; drops stale dist).
+  ( cd "$CORE_FORK" && tar --exclude=node_modules --exclude=.git --exclude=dist -cf - . ) | ( cd "$CORE_DIR" && tar -xf - )
+fi
+
+# Rebuild so dist/ reflects the current fork source (always on re-run).
+if [ ! -x "$CORE_BIN" ]; then
+  # Offline build needs the generated provider model data, which is gitignored
+  # upstream and generated from models.dev over the network. When absent, pull
+  # it from the published pi-ai npm package (registry is reachable).
+  AI_DATA="$CORE_DIR/packages/ai/src/providers/data"
+  if [ ! -f "$AI_DATA/.manifest.json" ]; then
+    AI_VER="$(node -e "console.log(require('$CORE_DIR/packages/ai/package.json').version)")"
+    echo "  ⏳ fetching provider model data (@earendil-works/pi-ai@$AI_VER)..."
+    ( cd "$CORE_DIR" && npm pack --silent "@earendil-works/pi-ai@$AI_VER" && \
+      tar -xzf "earendil-works-pi-ai-$AI_VER.tgz" package/dist/providers/data && \
+      mkdir -p "$AI_DATA" && cp package/dist/providers/data/*.json "$AI_DATA/" && \
+      cp package/dist/providers/data/.manifest.json "$AI_DATA/" && \
+      rm -rf "earendil-works-pi-ai-$AI_VER.tgz" package )
+    echo "  ✓ model data ready"
+  fi
+  echo "  ⏳ building Miro core (Pi fork)..."
+  (cd "$CORE_DIR" && npm run build:offline 2>&1 | tail -5)
+  echo "  ✓ Miro core built (white-label piConfig baked in)"
 else
   echo "  ✓ Miro core present ($CORE_BIN)"
 fi
-
-# patch the official white-label hook (idempotent)
-node - "$CORE_PI_PKG" <<'EOF'
-const fs = require("fs");
-const file = process.argv[2];
-const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
-const want = { name: "miro", configDir: ".miro" };
-if (JSON.stringify(pkg.piConfig) !== JSON.stringify(want)) {
-  pkg.piConfig = want;
-  fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
-  console.log("  ✓ core white-labeled: piConfig =", JSON.stringify(want));
-} else {
-  console.log("  ✓ core white-label patch already applied");
-}
-EOF
 
 # --- inherit credentials from Pi (only when Miro has none yet) -----------------
 if [ ! -f "$AGENT_DIR/auth.json" ] && [ -f "$HOME/.pi/agent/auth.json" ]; then

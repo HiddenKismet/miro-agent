@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,9 +36,17 @@ type Client struct {
 }
 
 // New spawns the engine with the given binary and args.
+//
+// The engine binary may be a built JS entry (e.g. dist/cli.js), in which case
+// it is executed via `node`. Executable binaries are spawned directly.
 func New(bin string, args ...string) (*Client, error) {
 	full := append([]string{"--mode", "rpc"}, args...)
-	cmd := exec.Command(bin, full...)
+	var cmd *exec.Cmd
+	if strings.HasSuffix(bin, ".js") {
+		cmd = exec.Command("node", append([]string{bin}, full...)...)
+	} else {
+		cmd = exec.Command(bin, full...)
+	}
 	cmd.Env = os.Environ()
 	cmd.Stderr = os.Stderr
 

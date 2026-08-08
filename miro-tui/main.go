@@ -29,7 +29,7 @@ func main() {
 		if home == "" {
 			home = filepath.Join(os.Getenv("HOME"), ".miro")
 		}
-		coreBin = filepath.Join(home, "core", "node_modules", ".bin", "pi")
+		coreBin = filepath.Join(home, "core", "packages", "coding-agent", "dist", "cli.js")
 	}
 
 	// Startup working-directory chooser (临时会话 / 进入项目), unless a
