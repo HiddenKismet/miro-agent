@@ -14,6 +14,9 @@ Miro 源自拉丁语「miror」：观察、探寻、洞察。
   - **Tasks**：多步骤工作流用 /task；断点后会自动续跑。
   - **Goal**：目标、待办列表、循环优化用 /goal /list /loop。
   - **Subagents**：大范围调研或多路并行用 subagent 工具。
+  - **Dynamic Workflow**：任务需要多子代理编排（并行 fan-out、多视角审查、结构化
+    验证、大规模 sweep）时，用 workflow 工具写确定性 JS 编排脚本；也读
+    miro-workflow 技能（原语速查 + 确定性约束 + 示例）。命名 workflow 可用 /<name> 直接跑。
   - **Git**：用户要查看/检查改动用 git_status / git_diff / git_log / git_branch；
     要提交、推送或发布版本时，用 git_commit / git_push / git_release 工具
     （这些写工具会让用户确认，无需自行拼接 git 命令）。

@@ -48,10 +48,14 @@ else
   echo "  ✓ existing Miro home found — refreshing built-in components"
 fi
 
-# --- refresh themes + plugins dir (always, so re-runs upgrade them) ------------
-mkdir -p "$AGENT_DIR/themes" "$AGENT_DIR/plugins"
+# --- refresh themes + plugins + bundled skills (always, so re-runs upgrade) ------
+mkdir -p "$AGENT_DIR/themes" "$AGENT_DIR/plugins" "$AGENT_DIR/skills"
 cp "$TEMPLATE"/themes/*.json "$AGENT_DIR/themes/" 2>/dev/null || true
-echo "  ✓ themes + plugins dir"
+# Built-in skills from the agent template (miro-workflow etc.); playwright-cli is
+# handled below. User-added skills are preserved (never removed).
+rm -rf "$AGENT_DIR/skills/miro-workflow"
+cp -R "$TEMPLATE/skills/miro-workflow" "$AGENT_DIR/skills/miro-workflow" 2>/dev/null || true
+echo "  ✓ themes + plugins + bundled skills"
 
 # --- merge built-in packages into settings.json (preserves user settings) -----
 node - "$AGENT_DIR/settings.json" "npm:pi-subagents" "npm:@mjasnikovs/pi-task" "npm:pi-goal-list-loop-audit" <<'EOF'
