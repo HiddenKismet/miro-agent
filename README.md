@@ -34,6 +34,7 @@ Miro 是基于 [Pi Agent](https://github.com/earendil-works/pi) 二次定制开�
 |---|---|---|
 | **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理、Git 面板 | `/web` |
 | **Subagents** | 子代理并行/串行协作 | `/run` `/parallel` |
+| **Dynamic Workflow** | 模型现场编写确定性 JS 编排脚本（agent/parallel/pipeline），沙箱执行多子代理；命名 workflow 自动注册 `/name` 命令 | `workflow` 工具 / `~/.miro/agent/workflows/` / `miro-workflow` 技能 |
 | **Tasks** | 工作流任务 + 重启自动续跑 | `/task` |
 | **Goal** | 目标 + 列表 + 审计 + 循环优化 | `/goal` `/list` `/loop` |
 | **Git** | 智能提交、仓库状态、发布流程（版本 bump → tag → push → GitHub Release） | `/commit` `/git` `/release` |
@@ -63,13 +64,14 @@ Miro 自带一份**自维护的 Pi Agent fork**（`core/`，独立 git 仓库，
 
 | 设计 | 说明 | 位置（core/packages/coding-agent/src/core/） |
 |---|---|---|
-| **静态工具池** | 固定顺序工具注册表（内置 7 + Miro 25 个），模型 schema 唯一来源；扩展不再动态注册代码工具 | `tools/tool-pool.ts` |
+| **静态工具池** | 固定顺序工具注册表（内置 7 + Miro 26 个），模型 schema 唯一来源；扩展不再动态注册代码工具 | `tools/tool-pool.ts` |
 | **分层权限管道** | fail-closed 决策：deny 规则 → 工具 checkPermissions → 内容级 `Tool(args)` → 受保护路径免疫 → allow → 默认读安全/写询问 | `permissions/permissions.ts` |
 | **声明式插件** | 插件 = markdown（命令/技能），无可执行 JS；命令进模板池、技能进技能池 | `plugins/plugin-loader.ts` |
 | **Prompt-cache 分段** | 系统提示词按静态核心/动态尾部边界拆块，静态段长缓存 | `system-prompt.ts` + ai `anthropic-messages.ts` |
 | **预测式 autocompact** | 按下一轮预估增长（maxOutput+15K）提前压缩，避免 413 | `compaction/compaction.ts` |
 | **memdir 记忆** | 索引 + 记忆文件 + turn 前异步相关预取，注入动态尾部 | `memory/memdir.ts` |
 | **Subagent 隔离** | 子代理用 `--tools` 白名单替换父规则，审批不泄漏；`<task-notification>` 回传 | `builtin/miro-subagent-tool.ts` |
+| **Dynamic Workflow** | vendored 确定性 JS 编排引擎（端口注入）；模型现场写脚本，沙箱执行多子代理；journal/resume、结构化输出、命名 workflow 命令 | `vendor/workflow-engine/` + `workflow/ports.ts` + `builtin/miro-workflow-tool.ts` |
 
 > **开发说明**：`core/` 是 Pi monorepo 的 fork（分支 `miro/dev`），改动请在其内部提交；`install.sh` 会把它复制到 `~/.miro/core` 并离线构建。首次安装需要联网（npm 依赖 + 模型数据）。
 
