@@ -81,6 +81,8 @@ cd miro-agent
 ./install.sh
 ```
 
+> **core fork 说明**：`install.sh` 优先使用仓库内 `core/` 目录（Pi fork，分支 `miro/dev`）构建。`core/` 是独立 git 仓库（在 `.gitignore` 中），当前未包含在 GitHub 发布中——`install.sh` 检测到 `core/` 缺失时会尝试 `git clone --branch miro/dev https://github.com/earendil-works/pi.git`，但该分支尚未推送到上游，**fresh clone 安装暂不可用**（需要先在本地准备 `core/`，详见下方开发指南）。
+
 运行：
 
 ```bash
@@ -88,6 +90,45 @@ cd miro-agent
 # 或把 ~/.miro/bin 加入 PATH 后直接：
 miro
 ```
+
+## 开发指南（core fork）
+
+内核是 `core/` 目录下的 Pi monorepo fork（分支 `miro/dev`，保留上游 remote 定期同步）。
+
+```bash
+# 1. 进入 fork 目录（独立 git 仓库）
+cd core
+git checkout miro/dev          # 已切换
+
+# 2. 安装依赖（首次）与离线构建
+npm ci --no-audit --no-fund
+npm run build:offline
+
+# 3. 改动后的检查链（pre-commit 也会跑）
+npx biome check --write --unsafe <改动的文件>
+cd packages/coding-agent && npx tsgo -p tsconfig.build.json --noEmit
+
+# 4. 本地验证：白标 CLI + RPC 冒烟
+cd packages/coding-agent
+printf '{"type":"get_state","id":1}\n' | node dist/cli.js --mode rpc
+
+# 5. 同步上游（miro/dev 分支）
+git fetch origin && git merge origin/main
+
+# 6. 把 fork 推送到你自己的 GitHub 仓库后，install.sh 的 fresh-clone 路径才会生效
+```
+
+内核改动集中在 `core/packages/coding-agent/src/core/`：
+
+| 子系统 | 位置 |
+|---|---|
+| 静态工具池 | `tools/tool-pool.ts`、`tools/build-tool.ts` |
+| 内置工具/命令/钩子 | `builtin/`（git、task、pr、sandbox、web、mcp、subagent） |
+| 权限管道 | `permissions/permissions.ts`、`builtin/permission-guard.ts` |
+| 声明式插件 | `plugins/plugin-loader.ts` |
+| Prompt-cache 分段 | `system-prompt.ts`（+ `packages/ai/.../anthropic-messages.ts`） |
+| 预测式 autocompact | `compaction/compaction.ts`、`agent-session.ts` |
+| memdir 记忆 | `memory/memdir.ts` |
 
 ## 环境变量
 
