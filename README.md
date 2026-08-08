@@ -32,9 +32,9 @@ Miro 是基于 [Pi Agent](https://github.com/earendil-works/pi) 二次定制开�
 
 | 能力 | 说明 | 入口 |
 |---|---|---|
-| **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理、Git 面板 | `/web` |
+| **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理、Git 面板、**工作流实时进度面板** | `/web` |
 | **Subagents** | 子代理并行/串行协作 | `/run` `/parallel` |
-| **Dynamic Workflow** | 模型现场编写确定性 JS 编排脚本（agent/parallel/pipeline），**后台运行**（注册即返回 runId，完成异步通知），实时进度面板 + kill/resume | `workflow` 工具 / `/workflows` / `~/.miro/agent/workflows/` |
+| **Dynamic Workflow** | 模型现场编写确定性 JS 编排脚本（agent/parallel/pipeline），**后台运行**（注册即返回 runId，完成异步通知），实时进度面板（TUI `/workflows` + **Web 面板**）+ kill/resume | `workflow` 工具 / `/workflows` / `~/.miro/agent/workflows/` |
 | **Hook 系统** | 全量 27 种生命周期钩子（PreToolUse/PostToolUse/Stop/SessionStart…），settings.json 配置 + 子进程执行，PreToolUse 决策并入权限管道 | `~/.miro/agent/settings.json` 的 `hooks` 字段 / `/hooks` |
 | **Tasks** | 工作流任务 + 重启自动续跑 | `/task` |
 | **Goal** | 目标 + 列表 + 审计 + 循环优化 | `/goal` `/list` `/loop` |
