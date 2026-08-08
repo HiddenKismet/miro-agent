@@ -34,7 +34,8 @@ Miro 是基于 [Pi Agent](https://github.com/earendil-works/pi) 二次定制开�
 |---|---|---|
 | **Miro Web** | 浏览器界面：聊天、目标、任务工作流、凭据、会话管理、Git 面板 | `/web` |
 | **Subagents** | 子代理并行/串行协作 | `/run` `/parallel` |
-| **Dynamic Workflow** | 模型现场编写确定性 JS 编排脚本（agent/parallel/pipeline），沙箱执行多子代理；命名 workflow 自动注册 `/name` 命令 | `workflow` 工具 / `~/.miro/agent/workflows/` / `miro-workflow` 技能 |
+| **Dynamic Workflow** | 模型现场编写确定性 JS 编排脚本（agent/parallel/pipeline），**后台运行**（注册即返回 runId，完成异步通知），实时进度面板 + kill/resume | `workflow` 工具 / `/workflows` / `~/.miro/agent/workflows/` |
+| **Hook 系统** | 全量 27 种生命周期钩子（PreToolUse/PostToolUse/Stop/SessionStart…），settings.json 配置 + 子进程执行，PreToolUse 决策并入权限管道 | `~/.miro/agent/settings.json` 的 `hooks` 字段 / `/hooks` |
 | **Tasks** | 工作流任务 + 重启自动续跑 | `/task` |
 | **Goal** | 目标 + 列表 + 审计 + 循环优化 | `/goal` `/list` `/loop` |
 | **Git** | 智能提交、仓库状态、发布流程（版本 bump → tag → push → GitHub Release） | `/commit` `/git` `/release` |
@@ -71,7 +72,8 @@ Miro 自带一份**自维护的 Pi Agent fork**（`core/`，独立 git 仓库，
 | **预测式 autocompact** | 按下一轮预估增长（maxOutput+15K）提前压缩，避免 413 | `compaction/compaction.ts` |
 | **memdir 记忆** | 索引 + 记忆文件 + turn 前异步相关预取，注入动态尾部 | `memory/memdir.ts` |
 | **Subagent 隔离** | 子代理用 `--tools` 白名单替换父规则，审批不泄漏；`<task-notification>` 回传 | `builtin/miro-subagent-tool.ts` |
-| **Dynamic Workflow** | vendored 确定性 JS 编排引擎（端口注入）；模型现场写脚本，沙箱执行多子代理；journal/resume、结构化输出、命名 workflow 命令 | `vendor/workflow-engine/` + `workflow/ports.ts` + `builtin/miro-workflow-tool.ts` |
+| **Dynamic Workflow** | vendored 确定性 JS 编排引擎（端口注入）；模型现场写脚本，**后台运行 + 进度 store/bus + 持久化/resume + /workflows 面板**；agent 级精确 kill | `vendor/workflow-engine/` + `workflow/` + `builtin/miro-workflow-tool.ts` |
+| **Hook 系统** | 全量 27 事件；配置驱动 + 子进程执行（JSON stdin/stdout 协议）；PreToolUse 决策并入权限管道（allow 不绕过规则、deny 阻断、ask 强问、updatedInput 改写）；信任门禁防 RCE | `hooks/` |
 
 > **开发说明**：`core/` 是 Pi monorepo 的 fork（分支 `miro/dev`），改动请在其内部提交；`install.sh` 会把它复制到 `~/.miro/core` 并离线构建。首次安装需要联网（npm 依赖 + 模型数据）。
 
